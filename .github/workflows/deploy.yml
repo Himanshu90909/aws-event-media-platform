@@ -1,0 +1,53 @@
+name: CI/CD
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: us-east-1
+  STACK_NAME: aws-event-media-platform
+
+jobs:
+  test-and-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: aws-actions/setup-sam@v2
+      - run: pip install -r requirements-dev.txt
+      - run: ruff check src tests
+      - run: pytest
+      - run: sam validate --lint
+      - run: sam build
+
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: test-and-validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/setup-sam@v2
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOYMENT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - run: sam build
+      - run: >-
+          sam deploy
+          --stack-name ${{ env.STACK_NAME }}
+          --region ${{ env.AWS_REGION }}
+          --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM
+          --resolve-s3
+          --no-confirm-changeset
+          --no-fail-on-empty-changeset
+          --parameter-overrides
+          GitHubRepository=${{ github.repository }}
+          GitHubBranch=${{ github.ref_name }}

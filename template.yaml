@@ -1,0 +1,195 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Event-driven media processing platform with API Gateway, Lambda, SQS, DynamoDB, and S3.
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedPattern: '^[a-z0-9-]+$'
+  GitHubRepository:
+    Type: String
+    Default: Himanshu90909/aws-event-media-platform
+    Description: GitHub org/repository allowed to assume the deployment role.
+  GitHubBranch:
+    Type: String
+    Default: main
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 30
+    MemorySize: 256
+    Tracing: Active
+    Environment:
+      Variables:
+        JOBS_TABLE: !Ref JobsTable
+        MEDIA_BUCKET: !Ref MediaBucket
+        PROCESSING_QUEUE_URL: !Ref ProcessingQueue
+    Tags:
+      Project: event-media-platform
+      Environment: !Ref Environment
+
+Resources:
+  JobsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: jobId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: jobId
+          KeyType: HASH
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+      Tags:
+        - Key: Project
+          Value: event-media-platform
+
+  MediaBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      BucketName: !Sub '${AWS::StackName}-media-${AWS::AccountId}-${AWS::Region}'
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+
+  ProcessingDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+
+  ProcessingQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      VisibilityTimeout: 180
+      MessageRetentionPeriod: 345600
+      ReceiveMessageWaitTimeSeconds: 10
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt ProcessingDLQ.Arn
+        maxReceiveCount: 3
+      SqsManagedSseEnabled: true
+
+  IngestFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: ingest.app.handler
+      Events:
+        CreateJob:
+          Type: Api
+          Properties:
+            Path: /jobs
+            Method: post
+      Policies:
+        - DynamoDBWritePolicy:
+            TableName: !Ref JobsTable
+        - S3WritePolicy:
+            BucketName: !Ref MediaBucket
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt ProcessingQueue.QueueName
+
+  StatusFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: status.app.handler
+      Events:
+        GetJob:
+          Type: Api
+          Properties:
+            Path: /jobs/{jobId}
+            Method: get
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref JobsTable
+
+  WorkerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: worker.app.handler
+      Timeout: 120
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref JobsTable
+        - DynamoDBWritePolicy:
+            TableName: !Ref JobsTable
+        - S3ReadPolicy:
+            BucketName: !Ref MediaBucket
+      Events:
+        QueueEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt ProcessingQueue.Arn
+            BatchSize: 1
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+
+  GitHubActionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${AWS::StackName}-github-actions'
+      Description: Scoped deployment role for GitHub Actions via OIDC.
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com'
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubRepository}:ref:refs/heads/${GitHubBranch}'
+      Policies:
+        - PolicyName: SamDeployment
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudformation:*
+                  - s3:*
+                  - lambda:*
+                  - apigateway:*
+                  - dynamodb:*
+                  - sqs:*
+                  - iam:*
+                  - logs:*
+                  - events:*
+                  - xray:*
+                Resource: '*'
+
+Outputs:
+  ApiUrl:
+    Description: API Gateway endpoint.
+    Value: !Sub 'https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod'
+  JobsTableName:
+    Value: !Ref JobsTable
+  MediaBucketName:
+    Value: !Ref MediaBucket
+  ProcessingQueueUrl:
+    Value: !Ref ProcessingQueue
+  ProcessingDLQUrl:
+    Value: !Ref ProcessingDLQ
+  GitHubActionsRoleArn:
+    Value: !GetAtt GitHubActionsRole.Arn
