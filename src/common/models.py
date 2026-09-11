@@ -1,7 +1,8 @@
 from dataclasses import dataclass
 from typing import Any
 
-STATUSES = {"QUEUED", "PROCESSING", "COMPLETED", "FAILED"}
+STATUSES = {"AWAITING_UPLOAD", "QUEUED", "PROCESSING", "COMPLETED", "FAILED"}
+
 
 @dataclass(frozen=True)
 class Job:
