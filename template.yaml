@@ -26,6 +26,7 @@ Globals:
         JOBS_TABLE: !Ref JobsTable
         MEDIA_BUCKET: !Ref MediaBucket
         PROCESSING_QUEUE_URL: !Ref ProcessingQueue
+        UPLOAD_URL_EXPIRES_IN: 900
     Tags:
       Project: event-media-platform
       Environment: !Ref Environment
@@ -102,6 +103,23 @@ Resources:
         - DynamoDBWritePolicy:
             TableName: !Ref JobsTable
         - S3WritePolicy:
+            BucketName: !Ref MediaBucket
+
+  CompleteFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: complete.app.handler
+      Events:
+        CompleteJob:
+          Type: Api
+          Properties:
+            Path: /jobs/{jobId}/complete
+            Method: post
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref JobsTable
+        - S3ReadPolicy:
             BucketName: !Ref MediaBucket
         - SQSSendMessagePolicy:
             QueueName: !GetAtt ProcessingQueue.QueueName
