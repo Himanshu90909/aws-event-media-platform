@@ -21,6 +21,7 @@ def test_state_transition_rules():
     assert can_transition("AWAITING_UPLOAD", "QUEUED")
     assert can_transition("QUEUED", "PROCESSING")
     assert can_transition("PROCESSING", "COMPLETED")
+    assert can_transition("PROCESSING", "QUEUED")
     assert not can_transition("COMPLETED", "PROCESSING")
     assert not can_transition("AWAITING_UPLOAD", "COMPLETED")
 
@@ -130,6 +131,33 @@ def test_worker_processes_and_skips_duplicate(monkeypatch):
     assert mod.table.update_item.call_count == 2
     mod.table.get_item.return_value = {"Item": {"jobId": job_id, "status": "COMPLETED", "objectKey": "media/key"}}
     assert mod.handler(event, None) == {"batchItemFailures": []}
+
+
+def test_worker_requeues_transient_error_and_fails_on_final_attempt():
+    mod = load("worker.app")
+    mod.table = Mock()
+    mod.s3 = Mock()
+    mod.s3.head_object.side_effect = RuntimeError("codec temporarily unavailable")
+    job_id = "00000000-0000-0000-0000-000000000000"
+    mod.table.get_item.return_value = {"Item": {"jobId": job_id, "status": "QUEUED", "objectKey": "media/key"}}
+    event = {
+        "Records": [
+            {
+                "messageId": "m1",
+                "body": json.dumps({"jobId": job_id}),
+                "attributes": {"ApproximateReceiveCount": "1"},
+            }
+        ]
+    }
+    assert mod.handler(event, None) == {"batchItemFailures": [{"itemIdentifier": "m1"}]}
+    assert mod.table.update_item.call_args_list[-1].kwargs["ExpressionAttributeValues"][":status"] == "QUEUED"
+
+    mod.table.reset_mock()
+    event["Records"][0]["attributes"]["ApproximateReceiveCount"] = "3"
+    assert mod.handler(event, None) == {"batchItemFailures": [{"itemIdentifier": "m1"}]}
+    final_values = mod.table.update_item.call_args_list[-1].kwargs["ExpressionAttributeValues"]
+    assert final_values[":status"] == "FAILED"
+    assert final_values[":error"] == "codec temporarily unavailable"
 
 
 def test_worker_returns_batch_failure_for_retry(monkeypatch):
