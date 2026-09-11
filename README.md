@@ -14,15 +14,15 @@ A production-style, asynchronous media-job API built with AWS SAM. The API accep
 ```mermaid
 flowchart LR
   C[Client] --> API[API Gateway]
-  API --> I[Ingest Lambda<br/>POST /jobs]
-  I --> D[(DynamoDB<br/>Job state)]
-  I --> S[Private S3<br/>Media objects]
+  API --> I[Ingest Lambda - POST jobs]
+  I --> D[(DynamoDB - Job state)]
+  I --> S[Private S3 - Media objects]
   I --> Q[SQS Processing Queue]
   Q --> W[Worker Lambda]
   W --> D
   W --> S
   Q -->|after 3 receives| DLQ[SQS Dead-Letter Queue]
-  API --> ST[Status Lambda<br/>GET /jobs/{jobId}]
+  API --> ST[Status Lambda - GET job status]
   ST --> D
 ```
 
