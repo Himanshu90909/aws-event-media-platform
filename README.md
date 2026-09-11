@@ -34,23 +34,7 @@ flowchart LR
 
 ## API
 
-### `POST /jobs`
-
-Request:
-
-```json
-{"fileName":"video.mp4","contentType":"video/mp4"}
-```
-
-Returns HTTP `202`:
-
-```json
-{"jobId":"uuid","status":"QUEUED","objectKey":"media/uuid/video.mp4"}
-```
-
-The platform returns a stable object key. In a production upload flow, the next extension would be a presigned PUT URL so the client uploads directly to S3 without sending media through API Gateway.
-
-### `GET /jobs/{jobId}`
+### `POST /jobs`\n\nRequest:\n\n```json\n{"fileName":"video.mp4","contentType":"video/mp4"}\n```\n\nReturns HTTP `202` with status `AWAITING_UPLOAD`, a stable object key, and a short-lived presigned PUT URL:\n\n```json\n{"jobId":"uuid","status":"AWAITING_UPLOAD","objectKey":"media/uuid/video.mp4","uploadUrl":"https://...","uploadUrlExpiresIn":900}\n```\n\nUpload the bytes to `uploadUrl` with a PUT request using the same `Content-Type`, then call `POST /jobs/{jobId}/complete`. API Gateway never carries the media bytes.\n### `GET /jobs/{jobId}`
 
 Returns HTTP `200` with `jobId`, `fileName`, `contentType`, `status`, `createdAt`, `updatedAt`, `objectKey`, and `error`. It returns `404` for a missing job and `400` for an invalid UUID.
 
