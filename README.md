@@ -42,7 +42,7 @@ Returns HTTP `200` with `jobId`, `fileName`, `contentType`, `status`, `createdAt
 
 The table uses `jobId` as its partition key. The state machine is:
 
-`QUEUED -> PROCESSING -> COMPLETED` or `PROCESSING -> FAILED`.
+`AWAITING_UPLOAD -> QUEUED -> PROCESSING -> COMPLETED`. A transient worker error returns the job to `QUEUED` for the next SQS delivery; after the third receive it becomes `FAILED`.
 
 The worker uses `ConditionExpression #status = :expected` for every transition. If two SQS deliveries race, only one can claim `QUEUED -> PROCESSING`; the other treats the conditional failure as an idempotent duplicate. Terminal jobs are skipped. This matters because SQS provides at-least-once delivery, so duplicate messages are expected rather than exceptional.
 
