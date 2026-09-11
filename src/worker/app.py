@@ -10,6 +10,8 @@ from common.state import transition
 table = boto3.resource("dynamodb").Table(os.environ.get("JOBS_TABLE", "jobs"))
 s3 = boto3.client("s3")
 BUCKET = os.environ.get("MEDIA_BUCKET", "")
+MAX_RECEIVE_COUNT = 3
+
 
 def process_media(job_id: str, object_key: str) -> dict[str, Any]:
     # This is intentionally a lightweight, deterministic processing step suitable for Lambda.
@@ -17,7 +19,16 @@ def process_media(job_id: str, object_key: str) -> dict[str, Any]:
     metadata = s3.head_object(Bucket=BUCKET, Key=object_key)
     return {"processedBytes": metadata.get("ContentLength", 0), "processor": "lambda-metadata-v1"}
 
+
+def receive_count(record: dict[str, Any]) -> int:
+    try:
+        return max(1, int((record.get("attributes") or {}).get("ApproximateReceiveCount", "1")))
+    except (TypeError, ValueError):
+        return 1
+
+
 def handle_record(record: dict[str, Any]) -> str | None:
+    job_id = None
     try:
         payload = json.loads(record.get("body", "{}"))
         job_id = payload.get("jobId")
@@ -46,14 +57,17 @@ def handle_record(record: dict[str, Any]) -> str | None:
             log("worker", "COMPLETED", job_id, result=result)
         return None
     except Exception as exc:
-        job_id = locals().get("job_id")
+        attempt = receive_count(record)
         if job_id:
             try:
-                transition(table, job_id, "PROCESSING", "FAILED", error=str(exc)[:1000])
+                target = "FAILED" if attempt >= MAX_RECEIVE_COUNT else "QUEUED"
+                updates = {"error": str(exc)[:1000]} if target == "FAILED" else {}
+                transition(table, job_id, "PROCESSING", target, **updates)
             except Exception as update_exc:  # noqa: BLE001 - preserve original failure for SQS retry
                 log("worker", "ERROR", job_id, error=f"failure update failed: {update_exc}")
-        log("worker", "ERROR", job_id, error=str(exc))
+        log("worker", "ERROR", job_id, attempt=attempt, error=str(exc))
         raise
+
 
 def handler(event: dict[str, Any], context: Any) -> dict[str, list[dict[str, str]]]:
     failures = []
