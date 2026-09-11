@@ -1,6 +1,6 @@
 # AWS Event-Driven Media Processing Platform
 
-A production-style, asynchronous media-job API built with AWS SAM. The API accepts metadata quickly, creates a durable job record, stores a private S3 object reference, and publishes a message for background processing. The worker is retry-safe and reports partial batch failures so SQS can retry failed messages and eventually redrive them to a dead-letter queue.
+A production-style, asynchronous media-job API built with AWS SAM. The API creates a durable job record, returns a short-lived presigned S3 PUT URL, and only publishes a processing message after the client confirms a non-empty upload. The worker is retry-safe and reports partial batch failures so SQS can retry failed messages and eventually redrive them to a dead-letter queue.
 
 ## Architecture
 
@@ -34,23 +34,7 @@ flowchart LR
 
 ## API
 
-### `POST /jobs`
-
-Request:
-
-```json
-{"fileName":"video.mp4","contentType":"video/mp4"}
-```
-
-Returns HTTP `202`:
-
-```json
-{"jobId":"uuid","status":"QUEUED","objectKey":"media/uuid/video.mp4"}
-```
-
-The platform returns a stable object key. In a production upload flow, the next extension would be a presigned PUT URL so the client uploads directly to S3 without sending media through API Gateway.
-
-### `GET /jobs/{jobId}`
+### `POST /jobs`\n\nRequest:\n\n```json\n{"fileName":"video.mp4","contentType":"video/mp4"}\n```\n\nReturns HTTP `202` with status `AWAITING_UPLOAD`, a stable object key, and a short-lived presigned PUT URL:\n\n```json\n{"jobId":"uuid","status":"AWAITING_UPLOAD","objectKey":"media/uuid/video.mp4","uploadUrl":"https://...","uploadUrlExpiresIn":900}\n```\n\nUpload the bytes to `uploadUrl` with a PUT request using the same `Content-Type`, then call `POST /jobs/{jobId}/complete`. API Gateway never carries the media bytes.\n### `GET /jobs/{jobId}`
 
 Returns HTTP `200` with `jobId`, `fileName`, `contentType`, `status`, `createdAt`, `updatedAt`, `objectKey`, and `error`. It returns `404` for a missing job and `400` for an invalid UUID.
 
@@ -58,7 +42,7 @@ Returns HTTP `200` with `jobId`, `fileName`, `contentType`, `status`, `createdAt
 
 The table uses `jobId` as its partition key. The state machine is:
 
-`QUEUED -> PROCESSING -> COMPLETED` or `PROCESSING -> FAILED`.
+`AWAITING_UPLOAD -> QUEUED -> PROCESSING -> COMPLETED`. A transient worker error returns the job to `QUEUED` for the next SQS delivery; after the third receive it becomes `FAILED`.
 
 The worker uses `ConditionExpression #status = :expected` for every transition. If two SQS deliveries race, only one can claim `QUEUED -> PROCESSING`; the other treats the conditional failure as an idempotent duplicate. Terminal jobs are skipped. This matters because SQS provides at-least-once delivery, so duplicate messages are expected rather than exceptional.
 
@@ -93,9 +77,9 @@ sam build
 sam deploy --guided
 ```
 
-Choose a unique stack name and region. The deployment creates the API, three Lambdas, DynamoDB table, private S3 bucket, processing queue, DLQ, event source mapping, execution roles, and GitHub OIDC deployment role. The stack outputs the API URL, resource names, and deployment role ARN.
+Choose a unique stack name and region. The deployment creates the API, four Lambdas, DynamoDB table, private S3 bucket, processing queue, DLQ, event source mapping, execution roles, and GitHub OIDC deployment role. The stack outputs the API URL, resource names, and deployment role ARN.
 
-For a real upload workflow, use the returned object key with a future presigned-URL endpoint. The current worker performs a deterministic metadata inspection (`HeadObject`) as a safe, low-cost processing placeholder; the boundary is ready for ffmpeg or an external media service without changing the event contract.
+The upload workflow is complete: create a job, PUT bytes to the returned presigned URL, finalize the job, and poll its status. The current worker performs a deterministic metadata inspection (`HeadObject`) as a safe, low-cost processing placeholder; the boundary is ready for ffmpeg or an external media service without changing the event contract.
 
 ## GitHub OIDC setup
 
@@ -120,6 +104,7 @@ All handlers emit JSON-shaped CloudWatch log entries with `operation`, `status`,
 
 - Invalid JSON or missing/unsafe fields return `400`.
 - Missing job IDs return `404` or `400` as appropriate.
+- Finalization rejects missing, empty, or Content-Type-mismatched uploads.
 - AWS client errors return a meaningful `503` from API handlers.
 - Worker exceptions return SQS batch failures, preserving retries.
 - Duplicate SQS deliveries are skipped after conditional state checks.
@@ -132,7 +117,7 @@ Pay-per-request DynamoDB, SQS, Lambda, and API Gateway keep low-volume student u
 
 ## Future improvements
 
-Add presigned upload URLs, S3 event notifications with an outbox/idempotency key, media transcoding via Step Functions or MediaConvert, authentication and per-user authorization, lifecycle policies, alarms for DLQ depth and worker errors, and a resource-scoped bootstrap/deployment role.
+Add S3 event notifications with an outbox/reconciliation process, media transcoding via Step Functions or MediaConvert, authentication and per-user authorization, lifecycle policies, alarms for DLQ depth and worker errors, and a resource-scoped bootstrap/deployment role.
 
 ## Resume bullets
 
