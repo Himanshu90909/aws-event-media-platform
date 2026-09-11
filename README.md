@@ -104,6 +104,8 @@ For a real upload workflow, use the returned object key with a future presigned-
 3. Confirm the template `GitHubRepository` parameter exactly matches `OWNER/REPOSITORY` and `GitHubBranch` matches `main`.
 4. The workflow uses `id-token: write` and `aws-actions/configure-aws-credentials`; no AWS access key secret is needed.
 
+If `AWS_DEPLOYMENT_ROLE_ARN` is not configured yet, the CI validation job still runs normally and the deployment job reports a clear skipped-deployment message instead of failing during credential setup. Add the secret when AWS deployment is ready.
+
 The example deployment role intentionally uses broad CloudFormation deployment actions to keep first-time SAM deployment reliable. For a hardened organization, replace it with a separate bootstrap role and a resource-scoped deployment policy.
 
 ## CI/CD

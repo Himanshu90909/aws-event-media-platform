@@ -32,14 +32,19 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: test-and-validate
     runs-on: ubuntu-latest
+    env:
+      AWS_DEPLOYMENT_ROLE_ARN: ${{ secrets.AWS_DEPLOYMENT_ROLE_ARN }}
     steps:
       - uses: actions/checkout@v4
       - uses: aws-actions/setup-sam@v2
       - uses: aws-actions/configure-aws-credentials@v4
+        if: env.AWS_DEPLOYMENT_ROLE_ARN != ''
         with:
-          role-to-assume: ${{ secrets.AWS_DEPLOYMENT_ROLE_ARN }}
+          role-to-assume: ${{ env.AWS_DEPLOYMENT_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
-      - run: sam build
+      - name: Build for deployment
+        if: env.AWS_DEPLOYMENT_ROLE_ARN != ''
+        run: sam build
       - run: >-
           sam deploy
           --stack-name ${{ env.STACK_NAME }}
@@ -51,3 +56,7 @@ jobs:
           --parameter-overrides
           GitHubRepository=${{ github.repository }}
           GitHubBranch=${{ github.ref_name }}
+        if: env.AWS_DEPLOYMENT_ROLE_ARN != ''
+      - name: Explain skipped deployment
+        if: env.AWS_DEPLOYMENT_ROLE_ARN == ''
+        run: echo 'Deployment skipped: configure the AWS_DEPLOYMENT_ROLE_ARN repository secret to enable AWS deployment.'
