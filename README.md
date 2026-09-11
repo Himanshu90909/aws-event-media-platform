@@ -2,20 +2,27 @@
 
 A production-style, asynchronous media-job API built with AWS SAM. The API accepts metadata quickly, creates a durable job record, stores a private S3 object reference, and publishes a message for background processing. The worker is retry-safe and reports partial batch failures so SQS can retry failed messages and eventually redrive them to a dead-letter queue.
 
+## Project links
+
+- [Architecture documentation](docs/architecture.md)
+- [AWS SAM infrastructure](template.yaml)
+- [CI/CD workflow](.github/workflows/deploy.yml)
+- [Test suite](tests/test_platform.py)
+
 ## Architecture
 
 ```mermaid
 flowchart LR
   C[Client] --> API[API Gateway]
-  API --> I[Ingest Lambda\nPOST /jobs]
-  I --> D[(DynamoDB\nJob state)]
-  I --> S[(Private S3\nMedia objects)]
+  API --> I[Ingest Lambda<br/>POST /jobs]
+  I --> D[(DynamoDB<br/>Job state)]
+  I --> S[Private S3<br/>Media objects]
   I --> Q[SQS Processing Queue]
   Q --> W[Worker Lambda]
   W --> D
   W --> S
   Q -->|after 3 receives| DLQ[SQS Dead-Letter Queue]
-  API --> ST[Status Lambda\nGET /jobs/{jobId}]
+  API --> ST[Status Lambda<br/>GET /jobs/{jobId}]
   ST --> D
 ```
 
