@@ -4,7 +4,7 @@ from typing import Any
 VALID_TRANSITIONS = {
     "AWAITING_UPLOAD": {"QUEUED", "FAILED"},
     "QUEUED": {"PROCESSING", "FAILED"},
-    "PROCESSING": {"COMPLETED", "FAILED"},
+    "PROCESSING": {"QUEUED", "COMPLETED", "FAILED"},
     "COMPLETED": set(),
     "FAILED": set(),
 }
