@@ -384,7 +384,7 @@ def radar(q: str) -> dict:
         pass
     if not jobs:
         try:  # Remotive — remote jobs, free public API
-            d = _http_json("https://remotive.com/api/remote-jobs?search=backend%20engineer&limit=50")
+            d = _http_json("https://remotive.com/api/remote-jobs?category=software-dev&limit=100")
             for j in d.get("jobs", []):
                 jobs.append({
                     "id": f"rem-{j.get('id')}",
@@ -412,7 +412,7 @@ def radar(q: str) -> dict:
                     "location": j.get("location") or "?",
                     "remote": bool(j.get("remote")),
                     "tags": (j.get("tags") or [])[:4],
-                    "posted": (j.get("created_at") or "")[:10],
+                    "posted": (time.strftime("%Y-%m-%d", time.gmtime(j["created_at"])) if isinstance(j.get("created_at"), (int, float)) else str(j.get("created_at") or "")[:10]),
                 })
         except Exception:
             pass
