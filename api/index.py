@@ -358,6 +358,81 @@ def list_jobs() -> dict:
     return {"jobs": jobs, "count": len(jobs)}
 
 
+
+# ---------------------------------------------------------------- job radar
+RADAR_CACHE = os.path.join("/tmp", "radar_cache.json")
+
+
+def _http_json(url: str, timeout: float = 4.5) -> dict:
+    req = urllib.request.Request(url, headers={
+        "User-Agent": "job-radar/1.0", "Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read().decode("utf-8", "replace"))
+
+
+def radar(q: str) -> dict:
+    """Live backend-engineer openings from public job boards (no API keys).
+    Cached 30 min per instance to stay well under rate limits."""
+    ts = time.time()
+    jobs = []
+    try:
+        with open(RADAR_CACHE) as f:
+            cached = json.load(f)
+        if ts - cached.get("ts", 0) < 1800:
+            jobs = cached["jobs"]
+    except Exception:
+        pass
+    if not jobs:
+        try:  # Remotive — remote jobs, free public API
+            d = _http_json("https://remotive.com/api/remote-jobs?search=backend%20engineer&limit=50")
+            for j in d.get("jobs", []):
+                jobs.append({
+                    "id": f"rem-{j.get('id')}",
+                    "title": (j.get("title") or "")[:120],
+                    "company": j.get("company_name") or "?",
+                    "url": j.get("url"),
+                    "location": j.get("candidate_required_location") or "Remote",
+                    "remote": True,
+                    "tags": ([t.lower() for t in [(j.get("category") or "")] if t] or [])[:3],
+                    "posted": (j.get("publication_date") or "")[:10],
+                })
+        except Exception:
+            pass
+        try:  # Arbeitnow — free public job board API
+            d = _http_json("https://www.arbeitnow.com/api/job-board-api")
+            for j in d.get("data", []):
+                title = (j.get("title") or "").lower()
+                if "backend" not in title and "back-end" not in title and "back end" not in title:
+                    continue
+                jobs.append({
+                    "id": f"arb-{j.get('slug')}",
+                    "title": (j.get("title") or "")[:120],
+                    "company": j.get("company_name") or "?",
+                    "url": j.get("url"),
+                    "location": j.get("location") or "?",
+                    "remote": bool(j.get("remote")),
+                    "tags": (j.get("tags") or [])[:4],
+                    "posted": (j.get("created_at") or "")[:10],
+                })
+        except Exception:
+            pass
+        try:
+            with open(RADAR_CACHE, "w") as f:
+                json.dump({"ts": ts, "jobs": jobs}, f)
+        except Exception:
+            pass
+    # hard backend filter (sources can leak off-topic listings)
+    def is_backend(j):
+        hay = " ".join([j.get("title", "")] + [t or "" for t in j.get("tags", [])]).lower()
+        return any(k in hay for k in ("backend", "back-end", "back end"))
+    jobs = [j for j in jobs if is_backend(j)]
+    if q:
+        ql = q.lower()
+        jobs = [j for j in jobs if ql in j["title"].lower() or ql in (j["company"] or "").lower()
+                or any(ql in (t or "").lower() for t in j.get("tags", []))]
+    return {"jobs": jobs[:60], "count": len(jobs), "fetchedAt": ts}
+
+
 # ------------------------------------------------------------------ HTTP
 def _send(h: BaseHTTPRequestHandler, status: int, body: dict) -> None:
     data = json.dumps(body).encode()
@@ -407,6 +482,9 @@ class handler(BaseHTTPRequestHandler):
             job_id = unquote(parts[-1])
         if not job_id:
             job_id = (query.get("jobId") or [""])[0]
+        if parts and parts[-1] == "radar":
+            _send(self, 200, radar((query.get("q") or [""])[0]))
+            return
         receipt = (query.get("receipt") or [None])[0]
         if job_id:
             _send(self, *get_job(job_id, receipt))

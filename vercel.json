@@ -5,6 +5,7 @@
   },
   "rewrites": [
     { "source": "/api/jobs/(.+)", "destination": "/api/jobs?jobId=$1" },
+    { "source": "/radar", "destination": "/radar.html" },
     { "source": "/jobs", "destination": "/" }
   ]
 }

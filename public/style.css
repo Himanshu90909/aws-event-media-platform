@@ -146,3 +146,29 @@ footer { text-align: center; color: var(--muted); font-size: 12.5px;
 .sm-note { color: var(--muted); font-size: 12px; margin-top: 14px; line-height: 1.6; }
 .sm-note code { color: var(--accent); }
 .dlq.ok { color: var(--ok); border-color: var(--ok); }
+
+/* job radar */
+.pulsar { color: var(--warn); animation: pulse 1.2s infinite; }
+.btn.small { width: auto; margin: 0; padding: 9px 16px; }
+.radar-controls { display: grid; grid-template-columns: 1fr 130px; gap: 10px; margin-bottom: 14px; }
+.radar-list { display: flex; flex-direction: column; gap: 9px; max-height: 460px; overflow-y: auto; }
+.rjob { display: flex; justify-content: space-between; align-items: center; gap: 14px;
+  background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; padding: 13px 16px; }
+.rjob-main { min-width: 0; }
+.rtitle { font-size: 14px; font-weight: 600; }
+.rmeta { color: var(--muted); font-size: 12px; margin-top: 3px; }
+.remote { color: var(--ok); font-size: 11px; font-family: var(--mono); }
+.rtags { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 5px; }
+.rtags span { font-size: 10px; font-family: var(--mono); color: var(--accent);
+  border: 1px solid var(--border); border-radius: 5px; padding: 1px 6px; }
+.rjob-actions { display: flex; gap: 7px; flex-shrink: 0; align-items: center; }
+.mini.bad { color: var(--bad); }
+a.mini { display: inline-block; text-decoration: none; }
+.kanban { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+@media (max-width: 900px) { .kanban { grid-template-columns: repeat(2, 1fr); } }
+.kcol { background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; padding: 10px; min-height: 130px; }
+.khead { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.kcount { color: var(--muted); font-family: var(--mono); font-size: 12px; }
+.kcard { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
+.kacts { display: flex; gap: 6px; margin-top: 9px; }
+.kempty { color: var(--muted); font-size: 12px; text-align: center; padding: 12px 0; }

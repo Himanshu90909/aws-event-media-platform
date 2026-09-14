@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Job Radar — Backend Engineer Openings</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <div class="brand">
+    <div class="logo">EM</div>
+    <div>
+      <h1>Job Radar <span class="pulsar">●</span></h1>
+      <p class="sub">Live backend engineer openings · application pipeline · <a href="/">← media pipeline</a></p>
+    </div>
+  </div>
+  <div class="api-health" id="apiHealth"><span class="dot"></span> scanning…</div>
+</header>
+
+<section class="metrics">
+  <div class="tile"><p class="tl">LIVE OPENINGS</p><p class="tv accent" id="mOpen">–</p></div>
+  <div class="tile"><p class="tl">SAVED</p><p class="tv" id="mSaved">0</p></div>
+  <div class="tile"><p class="tl">APPLIED</p><p class="tv accent" id="mApplied">0</p></div>
+  <div class="tile"><p class="tl">INTERVIEWS</p><p class="tv ok" id="mInterview">0</p></div>
+  <div class="tile"><p class="tl">OFFERS</p><p class="tv ok" id="mOffer">0</p></div>
+  <div class="tile"><p class="tl">RESPONSE RATE</p><p class="tv" id="mRate">–</p></div>
+</section>
+
+<section class="panel">
+  <h2>Radar <span class="hint">GET /api/radar — live from public job boards (Remotive · Arbeitnow)</span></h2>
+  <div class="radar-controls">
+    <input id="q" placeholder="filter: backend, golang, google, python…" spellcheck="false">
+    <button class="btn small" id="refreshBtn">↻ rescan</button>
+  </div>
+  <div id="radarList" class="radar-list"><div class="empty">Scanning job boards…</div></div>
+</section>
+
+<section class="panel">
+  <h2>Your application pipeline <span class="hint">SAVED → APPLIED → INTERVIEW → OFFER · saved in your browser</span></h2>
+  <div class="kanban" id="kanban"></div>
+</section>
+
+<section class="panel docs">
+  <h2>Hiring edge <span class="hint">what actually converts radar hits into offers</span></h2>
+  <div class="docs-grid">
+    <div><h3>Portfolio</h3><pre>apps you've shipped end-to-end
+  → event-media-platform: event-driven
+    architecture, DLQ, webhooks, observability
+  → truthsearch: RL bandit, deployed, live
+
+talk about these in interviews — they show
+systems thinking, not just tutorials.</pre></div>
+    <div><h3>Cadence</h3><pre>• rescan radar daily → 5 new saves
+• apply within 48h of posting
+• every resume = the job description
+  mirrored (keywords matter — ATS)
+• 1 mock interview / week
+• follow up after 7 days of silence</pre></div>
+  </div>
+</section>
+
+<footer>
+  <a href="https://github.com/Himanshu90909/aws-event-media-platform" target="_blank" rel="noopener">Himanshu90909/aws-event-media-platform</a> · radar at <code>/radar</code> · pipeline at <code>/</code>
+</footer>
+
+<script src="/radar.js"></script>
+</body>
+</html>
