@@ -1,0 +1,8 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "api/jobs.py": { "maxDuration": 10 },
+    "api/jobs/[jobId].py": { "maxDuration": 10 }
+  },
+  "rewrites": [{ "source": "/jobs", "destination": "/" }]
+}

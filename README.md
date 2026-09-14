@@ -160,3 +160,29 @@ Add presigned upload URLs, S3 event notifications with an outbox/idempotency key
 8. Which IAM actions could be narrowed further for a production deployment role?
 9. When would you choose Step Functions or MediaConvert over a Lambda worker?
 10. What changes are required to support multiple users and authorization?
+
+---
+
+## Vercel deployment (frontend + serverless backend)
+
+The repository is Vercel-ready — the same job API contract, ported from AWS SAM to Vercel serverless functions:
+
+| Piece | Location | AWS equivalent |
+|---|---|---|
+| Dashboard frontend | `index.html`, `app.js`, `style.css` | — (new) |
+| `POST /api/jobs` | `api/jobs.py` | Ingest Lambda + API Gateway |
+| `GET /api/jobs/{jobId}` | `api/jobs/[jobId].py` | Status Lambda + API Gateway |
+| Job record | signed receipt (HMAC-SHA256), returned by POST and verified on GET | DynamoDB item |
+| Async worker | lazy timestamp-driven transitions (QUEUED → PROCESSING → COMPLETED/FAILED) | SQS + worker Lambda |
+| Object reference | stable `media/{jobId}/{fileName}` objectKey | S3 private object |
+
+**Design note:** Vercel's runtime is stateless with no built-in database, so the DynamoDB record is replaced by a
+tamper-proof signed receipt: the POST response returns it, the client stores it (localStorage) and presents it on
+status calls, and the status endpoint verifies the HMAC before reconstructing state. This keeps the full
+conditional state machine, `202/200/400/404` contract, and failure semantics without any external database.
+
+**Deploy:** import this repository on [vercel.com/new](https://vercel.com/new) — zero configuration needed
+(`vercel.json` included). Optional: set a `JOB_SIGNING_SECRET` environment variable in the Vercel project settings.
+
+**Demo features:** live progress polling, state-machine visualization, simulated worker failure mode
+(`"simulate": "failure"`), copyable cURL commands per job.

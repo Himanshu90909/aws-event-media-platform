@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Event Media Platform — Vercel</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <div class="brand">
+    <div class="logo">EM</div>
+    <div>
+      <h1>Event Media Platform</h1>
+      <p class="sub">Event-driven media job API — Vercel deployment</p>
+    </div>
+  </div>
+  <div class="api-health" id="apiHealth"><span class="dot"></span> checking API…</div>
+</header>
+
+<main>
+  <section class="panel create-panel">
+    <h2>Create job <span class="hint">POST /api/jobs</span></h2>
+    <form id="jobForm">
+      <label for="fileName">File name</label>
+      <input id="fileName" name="fileName" placeholder="video.mp4" value="demo-reel.mp4" required>
+      <label for="contentType">Content type</label>
+      <select id="contentType" name="contentType">
+        <option>video/mp4</option>
+        <option>video/webm</option>
+        <option>audio/mpeg</option>
+        <option>image/png</option>
+        <option>image/jpeg</option>
+        <option>application/pdf</option>
+      </select>
+      <label class="check">
+        <input type="checkbox" id="simulate"> simulate worker failure
+        <span class="check-hint">job will end FAILED after retries (demo mode)</span>
+      </label>
+      <button type="submit" class="btn">Submit job</button>
+    </form>
+    <div id="formError" class="error hidden"></div>
+
+    <div class="state-machine">
+      <h3>Job state machine</h3>
+      <div class="sm">
+        <span class="state" data-state="QUEUED">QUEUED</span>
+        <span class="arrow">→</span>
+        <span class="state" data-state="PROCESSING">PROCESSING</span>
+        <span class="arrow">→</span>
+        <span class="state ok" data-state="COMPLETED">COMPLETED</span>
+        <span class="or">/</span>
+        <span class="state bad" data-state="FAILED">FAILED</span>
+      </div>
+      <p class="sm-note">Conditional transitions only — terminal states are final, exactly like the DynamoDB-backed worker.</p>
+    </div>
+  </section>
+
+  <section class="panel jobs-panel">
+    <h2>Jobs <span class="hint" id="jobCount">0</span></h2>
+    <div id="emptyState" class="empty">No jobs yet — submit one to watch the async pipeline run.</div>
+    <div id="jobList"></div>
+  </section>
+</main>
+
+<section class="panel docs">
+  <h2>API &amp; architecture mapping</h2>
+  <div class="docs-grid">
+    <div>
+      <h3>AWS SAM → Vercel</h3>
+      <table>
+        <tr><th>AWS</th><th>Vercel</th></tr>
+        <tr><td>API Gateway + Lambda</td><td>Serverless functions <code>api/jobs.py</code>, <code>api/jobs/[jobId].py</code></td></tr>
+        <tr><td>DynamoDB job record</td><td>Signed receipt (HMAC-SHA256) — durable &amp; tamper-proof</td></tr>
+        <tr><td>SQS + worker Lambda</td><td>Lazy timestamp-driven state transitions</td></tr>
+        <tr><td>S3 private object</td><td>Stable <code>objectKey</code> reference (<code>media/{jobId}/{fileName}</code>)</td></tr>
+        <tr><td>DLQ after 3 retries</td><td>Simulated failure mode ends FAILED with error detail</td></tr>
+      </table>
+    </div>
+    <div>
+      <h3>cURL</h3>
+      <pre id="curlPost"></pre>
+      <pre id="curlGet"></pre>
+      <p class="sm-note">Replace <code>&lt;receipt&gt;</code> with the value returned by POST — it is the durable job record in this deployment.</p>
+    </div>
+  </div>
+</section>
+
+<footer>
+  Source of truth: <a href="https://github.com/Himanshu90909/aws-event-media-platform" target="_blank" rel="noopener">Himanshu90909/aws-event-media-platform</a> · AWS SAM backend in <code>src/</code> · Vercel port in <code>api/</code>
+</footer>
+
+<script src="/app.js"></script>
+</body>
+</html>
