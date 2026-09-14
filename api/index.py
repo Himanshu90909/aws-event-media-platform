@@ -1,26 +1,37 @@
-"""Event Media Platform — single Vercel Python entrypoint (v2: staged pipeline).
+"""Event Media Platform — single Vercel Python entrypoint (v3: open integration API).
 
-Public API (unchanged contract, richer payload):
-  POST /api/jobs            -> 202 {"jobId","status":"QUEUED","objectKey","receipt"}
-  GET  /api/jobs/{jobId}    -> 200 job + stage timeline | 404 | 400
-  GET  /api/jobs            -> 200 {jobs:[...]} warm-instance list
+Any application can POST directly to this API:
 
-Pipeline model (stateless, deterministic):
-  Each job walks a 7-stage media pipeline:
-    ingest -> store -> queue -> transcode -> thumbnail -> metadata -> publish
-  Stage durations are derived deterministically from a hash of the jobId
-  (every job looks different, zero stored state). The signed receipt is the
-  durable record (HMAC-SHA256); the status endpoint recomputes the full
-  timeline from (createdAt, elapsed).
+  POST /api/jobs
+    Content-Type: application/json   (or application/x-www-form-urlencoded)
+    {
+      "fileName":   "clip.mp4",            # also accepted: file / name / filename
+      "contentType":"video/mp4",            # optional — inferred from extension
+      "callbackUrl":"https://your-app/hook",# optional — signed webhook on completion
+      "sourceApp":  "my-service",          # optional metadata
+      "tags":       ["ugc","beta"]         # optional metadata
+    }
+    -> 202 {"jobId","status","objectKey","receipt","callbackUrl"}
+    -> 400 on invalid input
 
-  Failure mode ("simulate": "failure"): one seeded worker stage fails.
-  The worker retries up to 3 attempts (SQS-style redrive with backoff),
-  then the job is dead-lettered: status FAILED, attempts 3, DLQ.
+  GET /api/jobs/{jobId}?receipt=<receipt>  -> full stage timeline
+  GET /api/jobs/{jobId}                    -> works while the creating instance is warm
 
-AWS mapping:
-  ingest/store/queue      -> API Gateway + Ingest Lambda + S3 + SQS   (status QUEUED)
-  transcode..publish      -> Worker Lambda fleet (worker-1..4)        (status PROCESSING)
-  3 failed attempts       -> SQS redrive policy -> DLQ                (status FAILED)
+Webhook delivery (at-least-once, industry standard):
+  when a job reaches COMPLETED or FAILED and a callbackUrl is present, the
+  next status poll fires the callback synchronously:
+
+    POST <callbackUrl>
+    X-EM-Signature: sha256=<hex HMAC-SHA256 of the raw body, JOB_SIGNING_SECRET>
+    {
+      "event":"job.completed", "jobId":"...", "status":"COMPLETED",
+      "objectKey":"media/{jobId}/{fileName}", "durationMs":8130,
+      "worker":"worker-2", "error":null
+    }
+
+  Receivers verify: HMAC-SHA256(JOB_SIGNING_SECRET, raw_body) == signature.
+
+CORS is fully open (Access-Control-Allow-Origin: *) — browsers can post too.
 """
 
 from __future__ import annotations
@@ -32,6 +43,7 @@ import json
 import os
 import re
 import time
+import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs, unquote
@@ -40,13 +52,22 @@ SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$")
 UUID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I
 )
+URL_RE = re.compile(r"^https?://[^\s]{3,2044}$", re.I)
 
 STAGES = ["ingest", "store", "queue", "transcode", "thumbnail", "metadata", "publish"]
-WORKER_FIRST = 3          # index of first worker stage
+WORKER_FIRST = 3
 MAX_ATTEMPTS = 3
 RETRY_DELAY = 1.2
 
+EXT_TYPES = {
+    "mp4": "video/mp4", "webm": "video/webm", "mov": "video/quicktime",
+    "mp3": "audio/mpeg", "wav": "audio/wav", "ogg": "audio/ogg",
+    "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+    "gif": "image/gif", "pdf": "application/pdf",
+}
+
 _STORE: dict[str, dict] = {}
+_CB_OK: dict[str, bool] = {}   # warm-instance webhook delivery ledger
 _TMP_PATH = os.path.join("/tmp", "jobs.json")
 
 
@@ -83,6 +104,10 @@ def verify_receipt(receipt: str) -> dict | None:
         return None
 
 
+def sign_payload(body: bytes) -> str:
+    return "sha256=" + hmac.new(_secret().encode(), body, hashlib.sha256).hexdigest()
+
+
 # --------------------------------------------------------- deterministic plan
 def _seed_of(job_id: str) -> int:
     return int(hashlib.md5(job_id.encode()).hexdigest()[:8], 16)
@@ -90,18 +115,17 @@ def _seed_of(job_id: str) -> int:
 
 def _rand(seed: int):
     x = seed or 1
-    while True:  # deterministic LCG
+    while True:
         x = (1664525 * x + 1013904223) % 2147483647
         yield x / 2147483647
 
 
 def build_plan(job_id: str, simulate: bool) -> dict:
-    """Stage durations + failure point, derived from the jobId hash."""
     r = _rand(_seed_of(job_id))
     durs = [round(0.45 + 1.35 * next(r), 2) for _ in STAGES]
     fail_stage = None
     if simulate:
-        fail_stage = WORKER_FIRST + int(next(r) * 4)  # transcode..metadata
+        fail_stage = WORKER_FIRST + int(next(r) * 4)
     return {"durs": durs, "failStage": fail_stage}
 
 
@@ -109,9 +133,7 @@ def worker_of(job_id: str) -> str:
     return f"worker-{1 + _seed_of(job_id) % 4}"
 
 
-# --------------------------------------------------------- timeline compute
 def compute_timeline(record: dict, now: float | None = None) -> dict:
-    """Full pipeline state for a job at time `now` — stateless & deterministic."""
     now = now if now is not None else time.time()
     plan = build_plan(record["jobId"], record.get("simulate") == "failure")
     durs, fail_stage = plan["durs"], plan["failStage"]
@@ -119,47 +141,39 @@ def compute_timeline(record: dict, now: float | None = None) -> dict:
     total = sum(durs)
 
     stages, t, done_dur, current, failed_final = [], 0.0, 0.0, None, False
-    attempts_at_fail, fail_stage_status = 0, "pending"
 
     for i, name in enumerate(STAGES):
         dur = durs[i]
         if elapsed < t:
             stages.append({"name": name, "status": "pending", "attempts": 0, "duration": dur})
-            if fail_stage == i:
-                fail_stage_status = "pending"
             continue
         if fail_stage == i:
             cycle = dur + RETRY_DELAY
             a = min(MAX_ATTEMPTS, int((elapsed - t) / cycle) + 1)
             run_end = t + (a - 1) * cycle + dur
-            if elapsed < run_end:  # attempt `a` currently executing
+            if elapsed < run_end:
                 st = "active" if a == 1 else "retrying"
                 stages.append({"name": name, "status": st, "attempts": a, "duration": dur})
-                current, attempts_at_fail = i, a
-                fail_stage_status = st
-            elif a >= MAX_ATTEMPTS:  # third attempt finished -> dead-letter
+                current = i
+            elif a >= MAX_ATTEMPTS:
                 stages.append({"name": name, "status": "failed", "attempts": MAX_ATTEMPTS, "duration": dur})
-                failed_final, attempts_at_fail = True, MAX_ATTEMPTS
-                fail_stage_status = "failed"
-            else:  # redrive pause between attempts
+                failed_final = True
+            else:
                 stages.append({"name": name, "status": "retrying", "attempts": a, "duration": dur})
-                current, attempts_at_fail = i, a
-                fail_stage_status = "retrying"
+                current = i
             continue
-        # normal stage
         if elapsed < t + dur:
             stages.append({"name": name, "status": "active", "attempts": 1, "duration": dur})
             current = i
-            break  # everything after is pending; fill below
+            break
         stages.append({"name": name, "status": "done", "attempts": 1, "duration": dur})
         done_dur += dur
         t += dur
 
-    if len(stages) < len(STAGES):  # pad pending after break
+    if len(stages) < len(STAGES):
         for j in range(len(stages), len(STAGES)):
             stages.append({"name": STAGES[j], "status": "pending", "attempts": 0, "duration": durs[j]})
 
-    # overall status + progress
     if failed_final:
         status, error = "FAILED", (
             f"Stage '{STAGES[fail_stage]}' failed after {MAX_ATTEMPTS} attempts "
@@ -170,10 +184,7 @@ def compute_timeline(record: dict, now: float | None = None) -> dict:
         status, error, progress = "COMPLETED", None, 100.0
     else:
         active = next((s for s in stages if s["status"] in ("active", "retrying")), None)
-        if current is not None and current >= WORKER_FIRST:
-            status = "PROCESSING"
-        else:
-            status = "QUEUED"
+        status = ("PROCESSING" if current is not None and current >= WORKER_FIRST else "QUEUED")
         error = None
         if active and active["status"] == "active":
             idx = STAGES.index(active["name"])
@@ -182,22 +193,72 @@ def compute_timeline(record: dict, now: float | None = None) -> dict:
             progress = done_dur / total * 100
 
     return {
-        "status": status,
-        "progress": round(progress, 1),
-        "stages": stages,
-        "worker": worker_of(record["jobId"]),
-        "error": error,
+        "status": status, "progress": round(progress, 1),
+        "stages": stages, "worker": worker_of(record["jobId"]), "error": error,
     }
+
+
+# --------------------------------------------------------- webhook delivery
+def fire_callback(record: dict, snap: dict, now: float) -> bool:
+    """Signed webhook POST — fired at-least-once when the job is terminal."""
+    url = record.get("callbackUrl")
+    if not url or snap["status"] not in ("COMPLETED", "FAILED"):
+        return False
+    event = "job.completed" if snap["status"] == "COMPLETED" else "job.failed"
+    payload = {
+        "event": event,
+        "jobId": record["jobId"],
+        "fileName": record["fileName"],
+        "contentType": record.get("contentType"),
+        "status": snap["status"],
+        "objectKey": record.get("objectKey"),
+        "durationMs": round((now - float(record["createdAt"])) * 1000),
+        "worker": snap["worker"],
+        "error": snap.get("error"),
+        "signedAt": round(now * 1000),
+    }
+    body = json.dumps(payload, separators=(",", ":")).encode()
+    req = urllib.request.Request(
+        url, data=body, method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "X-EM-Signature": sign_payload(body),
+            "X-EM-Event": event,
+            "User-Agent": "event-media-platform/1.0",
+        },
+    )
+    try:
+        urllib.request.urlopen(req, timeout=3)
+        return True
+    except Exception:
+        return False
 
 
 # ---------------------------------------------------------------- endpoints
 def create_job(body: dict) -> tuple[int, dict]:
-    file_name = body.get("fileName")
-    content_type = body.get("contentType")
+    """Flexible ingest — accepts several field spellings, infers content type,
+    stores optional callbackUrl + metadata. Mirrors src/ingest/app.py."""
+    file_name = body.get("fileName") or body.get("file") or body.get("name") or body.get("filename")
+    content_type = body.get("contentType") or body.get("type") or body.get("mimeType")
+    if not content_type and isinstance(file_name, str) and "." in file_name:
+        content_type = EXT_TYPES.get(file_name.rsplit(".", 1)[-1].lower(), "application/octet-stream")
+
     if not isinstance(file_name, str) or not SAFE_NAME.fullmatch(file_name):
         return 400, {"error": "fileName must be a safe file name up to 255 characters"}
     if not isinstance(content_type, str) or not content_type.strip() or len(content_type) > 127:
         return 400, {"error": "contentType is required"}
+
+    callback = body.get("callbackUrl") or body.get("webhook") or body.get("callback")
+    if callback is not None:
+        if not isinstance(callback, str) or not URL_RE.fullmatch(callback.strip()):
+            return 400, {"error": "callbackUrl must be a valid http(s) URL up to 2048 chars"}
+        callback = callback.strip()
+
+    tags = body.get("tags") if isinstance(body.get("tags"), list) else []
+    tags = [str(t)[:64] for t in tags[:5]]
+    source_app = body.get("sourceApp") or body.get("source")
+    source_app = source_app[:64] if isinstance(source_app, str) else None
+
     job_id = str(uuid.uuid4())
     record = {
         "jobId": job_id,
@@ -206,6 +267,9 @@ def create_job(body: dict) -> tuple[int, dict]:
         "objectKey": f"media/{job_id}/{file_name}",
         "createdAt": time.time(),
         "simulate": "failure" if body.get("simulate") == "failure" else None,
+        "callbackUrl": callback,
+        "tags": tags,
+        "sourceApp": source_app,
     }
     receipt = sign_record(record)
     _STORE[job_id] = dict(record, receipt=receipt)
@@ -215,6 +279,8 @@ def create_job(body: dict) -> tuple[int, dict]:
         "status": "QUEUED",
         "objectKey": record["objectKey"],
         "receipt": receipt,
+        "callbackUrl": callback,
+        "sourceApp": source_app,
     }
 
 
@@ -229,7 +295,16 @@ def get_job(job_id: str, receipt: str | None) -> tuple[int, dict]:
             _STORE[job_id] = rebuilt
     if record is None:
         return 404, {"error": "Job not found"}
-    snap = compute_timeline(record)
+
+    now = time.time()
+    snap = compute_timeline(record, now=now)
+
+    delivered = bool(_CB_OK.get(job_id))
+    if not delivered and record.get("callbackUrl") and snap["status"] in ("COMPLETED", "FAILED"):
+        delivered = fire_callback(record, snap, now)
+        if delivered:
+            _CB_OK[job_id] = True
+
     return 200, {
         "jobId": record["jobId"],
         "fileName": record["fileName"],
@@ -242,6 +317,10 @@ def get_job(job_id: str, receipt: str | None) -> tuple[int, dict]:
         "updatedAt": record["createdAt"],
         "objectKey": record["objectKey"],
         "error": snap["error"],
+        "callbackUrl": record.get("callbackUrl"),
+        "callbackDelivered": delivered,
+        "tags": record.get("tags", []),
+        "sourceApp": record.get("sourceApp"),
     }
 
 
@@ -293,7 +372,7 @@ def _send(h: BaseHTTPRequestHandler, status: int, body: dict) -> None:
 def _cors(h: BaseHTTPRequestHandler) -> None:
     h.send_header("Access-Control-Allow-Origin", "*")
     h.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-    h.send_header("Access-Control-Allow-Headers", "Content-Type")
+    h.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
 
 
 class handler(BaseHTTPRequestHandler):
@@ -309,9 +388,13 @@ class handler(BaseHTTPRequestHandler):
         try:
             length = int(self.headers.get("Content-Length") or 0)
             raw = self.rfile.read(length) if length else b"{}"
-            body = json.loads(raw or b"{}")
+            ctype = (self.headers.get("Content-Type") or "").lower()
+            if "application/x-www-form-urlencoded" in ctype:
+                body = {k: v[0] for k, v in parse_qs(raw.decode("utf-8", "replace")).items()}
+            else:
+                body = json.loads(raw or b"{}")
         except (json.JSONDecodeError, ValueError):
-            _send(self, 400, {"error": "Request body must be valid JSON"})
+            _send(self, 400, {"error": "Request body must be valid JSON or form-encoded"})
             return
         _send(self, *create_job(body))
 

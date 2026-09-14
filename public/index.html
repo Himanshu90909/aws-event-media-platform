@@ -12,7 +12,7 @@
     <div class="logo">EM</div>
     <div>
       <h1>Event Media Platform</h1>
-      <p class="sub">Async media pipeline · live observability · Vercel serverless</p>
+      <p class="sub">Async media pipeline · live observability · open integration API</p>
     </div>
   </div>
   <div class="api-health" id="apiHealth"><span class="dot"></span> checking API…</div>
@@ -28,7 +28,7 @@
 </section>
 
 <section class="panel flow-panel">
-  <h2>Pipeline <span class="hint">tap a stage below — this is what runs per job</span></h2>
+  <h2>Pipeline <span class="hint">what runs per job, left to right</span></h2>
   <div class="flow" id="flow">
     <div class="node" data-node="client">CLIENT</div>
     <div class="link"></div>
@@ -63,6 +63,8 @@
         <option>video/mp4</option><option>video/webm</option><option>audio/mpeg</option>
         <option>image/png</option><option>image/jpeg</option><option>application/pdf</option>
       </select>
+      <label for="cbUrl">Callback URL <span class="check-hint">optional — signed webhook on completion</span></label>
+      <input id="cbUrl" placeholder="https://your-app.com/webhooks/em" spellcheck="false">
       <label for="chaos">Chaos <span id="chaosVal" class="mono">0%</span> <span class="check-hint">— probability a job hits a failing worker</span></label>
       <input type="range" id="chaos" min="0" max="100" value="0">
       <button type="submit" class="btn">Submit job</button>
@@ -85,6 +87,17 @@
 <section class="panel log-panel">
   <h2>Live event log <span class="hint">streaming from the pipeline</span></h2>
   <div class="term" id="term"></div>
+</section>
+
+<section class="panel docs">
+  <h2>Integrate <span class="hint">any app can POST directly — CORS open, webhooks signed</span></h2>
+  <div class="docs-grid">
+    <div><h3>cURL</h3><pre id="snipCurl"></pre></div>
+    <div><h3>JavaScript (fetch)</h3><pre id="snipJs"></pre></div>
+    <div><h3>Python (requests)</h3><pre id="snipPy"></pre></div>
+    <div><h3>Webhook your app receives</h3><pre id="snipHook"></pre></div>
+  </div>
+  <p class="sm-note">Webhooks are delivered at-least-once with an <code>X-EM-Signature: sha256=…</code> header — verify with <code>HMAC-SHA256(JOB_SIGNING_SECRET, raw_body)</code>. Flexible fields: <code>fileName</code>/<code>file</code>/<code>name</code>, contentType inferred from extension, JSON or form-encoded bodies both accepted.</p>
 </section>
 
 <footer>
