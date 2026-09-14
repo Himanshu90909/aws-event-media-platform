@@ -1,175 +1,210 @@
-/* Event Media Platform — dashboard logic (vanilla JS, no build step) */
+/* Event Media Platform — live pipeline console */
 "use strict";
 
 const API = "/api/jobs";
-const LS_KEY = "emp.jobs.v1";
-const PROCESS_MS = 2000, COMPLETE_MS = 6000;
+const LS_KEY = "emp.jobs.v2";
+const STAGE_ICONS = { ingest: "⇪", store: "▣", queue: "⇄", transcode: "◧", thumbnail: "☫", metadata: "≡", publish: "✓" };
 
 const $ = (s) => document.querySelector(s);
-const form = $("#jobForm"), list = $("#jobList"), empty = $("#emptyState");
+const list = $("#jobList"), term = $("#term");
 
-/* ---------------- local job registry (receipts are durable records) ---- */
-function loadJobs() {
-  try { return JSON.parse(localStorage.getItem(LS_KEY) || "[]"); } catch { return []; }
-}
-function saveJobs(jobs) { localStorage.setItem(LS_KEY, JSON.stringify(jobs.slice(0, 50))); }
+/* ---------------- registry -------------------------------------------- */
+function loadJobs() { try { return JSON.parse(localStorage.getItem(LS_KEY) || "[]"); } catch { return []; } }
+function saveJobs(j) { localStorage.setItem(LS_KEY, JSON.stringify(j.slice(0, 80))); }
 function upsertJob(job) {
-  const jobs = loadJobs();
-  const i = jobs.findIndex((j) => j.jobId === job.jobId);
-  if (i >= 0) jobs[i] = job; else jobs.unshift(job);
+  const jobs = loadJobs(), i = jobs.findIndex((x) => x.jobId === job.jobId);
+  if (i >= 0) { jobs[i] = { ...jobs[i], ...job }; } else { jobs.unshift(job); }
   saveJobs(jobs);
-  render();
 }
 
-/* ---------------- API ------------------------------------------------- */
-async function createJob(fileName, contentType, simulate) {
-  const res = await fetch(API, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ fileName, contentType, ...(simulate ? { simulate: "failure" } : {}) }),
-  });
+/* ---------------- event log -------------------------------------------- */
+function esc(s) { return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+function ts() { return new Date().toLocaleTimeString([], { hour12: false }); }
+function log(kind, msg) {
+  const line = document.createElement("div");
+  line.className = "ln " + kind;
+  line.innerHTML = `<span class="t">${ts()}</span> ${esc(msg)}`;
+  term.appendChild(line);
+  while (term.children.length > 220) term.removeChild(term.firstChild);
+  term.scrollTop = term.scrollHeight;
+}
+
+/* ---------------- API ---------------------------------------------------- */
+async function apiPost(fileName, contentType, simulate) {
+  const res = await fetch(API, { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ fileName, contentType, ...(simulate ? { simulate: "failure" } : {}) }) });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-  upsertJob({ jobId: data.jobId, status: data.status, objectKey: data.objectKey,
-              receipt: data.receipt, fileName, contentType, createdAt: Date.now() });
+  const job = { jobId: data.jobId, status: data.status, objectKey: data.objectKey,
+                receipt: data.receipt, fileName, contentType, createdAt: Date.now(),
+                stages: [], worker: "?", progress: 0, error: null, events: [] };
+  upsertJob(job);
+  log("info", `▸ POST /api/jobs → 202 accepted · ${fileName} [${short(data.jobId)}]`);
+  log("info", `⇪ ingest λ validated + stored · objectKey ${data.objectKey}`);
   return data;
 }
-
-async function pollJob(job) {
-  const url = `${API}/${job.jobId}?receipt=${encodeURIComponent(job.receipt)}`;
-  const res = await fetch(url);
-  if (!res.ok) return null;
-  return res.json();
+async function apiGet(job) {
+  const res = await fetch(`${API}/${job.jobId}?receipt=${encodeURIComponent(job.receipt)}`);
+  return res.ok ? res.json() : null;
 }
 
-/* ---------------- rendering -------------------------------------------- */
-const STATUS_META = {
-  QUEUED:     { label: "QUEUED",     cls: "queued" },
-  PROCESSING: { label: "PROCESSING", cls: "processing" },
-  COMPLETED:  { label: "COMPLETED",  cls: "completed" },
-  FAILED:     { label: "FAILED",     cls: "failed" },
-};
-
-function progressOf(status, createdAt) {
-  const elapsed = Date.now() - createdAt;
-  if (status === "COMPLETED") return 100;
-  if (status === "FAILED") return 100;
-  if (status === "QUEUED") return Math.min(33, (elapsed / PROCESS_MS) * 33);
-  return Math.min(99, 33 + ((elapsed - PROCESS_MS) / (COMPLETE_MS - PROCESS_MS)) * 66);
+/* ---------------- pipeline diffing → event stream ------------------------- */
+function diffEvents(job, data) {
+  const prev = job.stages || [], id = short(job.jobId);
+  if (data.worker !== job.worker) { /* first fetch */ }
+  data.stages.forEach((st, i) => {
+    const p = prev[i] || { status: "pending", attempts: 0 };
+    if (st.status === "done" && p.status !== "done") {
+      if (st.name === "queue") log("info", `⇄ ${id} enqueued to SQS · visible to workers`);
+      else if (i >= 3) log("ok", `✓ ${id} ${st.name} done (${st.duration}s) on ${data.worker}`);
+      else log("dim", `✓ ${id} ${st.name} done`);
+    }
+    if (st.status === "active" && p.status !== "active") {
+      if (i >= 3) log("info", `◧ ${data.worker} claimed ${id} → ${st.name}`);
+    }
+    if (st.status === "retrying" && (p.attempts !== st.attempts || p.status !== "retrying")) {
+      log("warn", `⚠ ${id} ${st.name} attempt ${st.attempts} failed on ${data.worker} → redrive (retry in ~1.2s)`);
+    }
+  });
+  if (data.status === "COMPLETED" && job.status !== "COMPLETED") {
+    const dt = ((Date.now() - job.createdAt) / 1000).toFixed(1);
+    log("ok", `✓ ${id} published — pipeline complete in ${dt}s`);
+  }
+  if (data.status === "FAILED" && job.status !== "FAILED") {
+    log("bad", `✗ ${id} 3 attempts exhausted → message moved to DLQ`);
+  }
 }
 
-function el(html) {
-  const t = document.createElement("template");
-  t.innerHTML = html.trim();
-  return t.content.firstElementChild;
+/* ---------------- rendering --------------------------------------------- */
+const BADGE = { QUEUED: "queued", PROCESSING: "processing", COMPLETED: "completed", FAILED: "failed" };
+
+function stageChip(st) {
+  const cls = st.status, icon = STAGE_ICONS[st.name] || "";
+  const att = st.attempts > 1 ? `<em>${st.attempts}/3</em>` : "";
+  return `<span class="chip ${cls}">${icon} ${st.name}${att}</span>`;
 }
 
-function jobCard(job) {
-  const meta = STATUS_META[job.status] || STATUS_META.QUEUED;
-  const pct = Math.round(progressOf(job.status, job.createdAt));
-  const err = job.error ? `<p class="job-error">⚠ ${escapeHtml(job.error)}</p>` : "";
-  return el(`
-    <article class="job" data-id="${job.jobId}">
-      <div class="job-head">
-        <div>
-          <h3>${escapeHtml(job.fileName)}</h3>
-          <p class="job-sub">${escapeHtml(job.contentType)} · <code>${job.jobId}</code></p>
-        </div>
-        <span class="badge ${meta.cls}">${meta.label}</span>
+function card(job, live) {
+  const meta = BADGE[job.status] || "queued";
+  const chips = (job.stages || []).map(stageChip).join("");
+  const err = job.error ? `<p class="job-error">⚠ ${esc(job.error)}</p>` : "";
+  return `
+  <article class="job ${live ? "" : "settled"}" data-id="${job.jobId}">
+    <div class="job-head">
+      <div><h3>${esc(job.fileName)}</h3>
+        <p class="job-sub">${esc(job.contentType)} · <code>${short(job.jobId)}</code> · ${esc(job.worker || "")}</p></div>
+      <div class="head-right">
+        ${job.status === "FAILED" ? '<span class="dlq">DLQ</span>' : ""}
+        <span class="badge ${meta}">${job.status}</span>
       </div>
-      <div class="bar"><div class="fill ${meta.cls}" style="width:${pct}%"></div></div>
-      <div class="bar-row"><span>${pct}%</span><span class="objkey">${escapeHtml(job.objectKey)}</span></div>
-      ${err}
-      <div class="job-foot">
-        <span>${new Date(job.createdAt).toLocaleTimeString()}</span>
-        <button class="mini" data-copy="${job.jobId}">copy cURL</button>
-      </div>
-    </article>`);
+    </div>
+    <div class="bar"><div class="fill ${meta}" style="width:${job.progress || 0}%"></div></div>
+    <div class="bar-row"><span>${Math.round(job.progress || 0)}%</span><span class="objkey">${esc(job.objectKey)}</span></div>
+    <div class="chips">${chips}</div>
+    ${err}
+  </article>`;
 }
-
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, (c) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-}
-
-function curlFor(job) {
-  return `curl "${location.origin}/api/jobs/${job.jobId}?receipt=${job.receipt}"`;
-}
+function short(id) { return id.slice(0, 8); }
 
 function render() {
   const jobs = loadJobs();
   $("#jobCount").textContent = jobs.length;
-  empty.classList.toggle("hidden", jobs.length > 0);
-  list.innerHTML = "";
-  for (const job of jobs) {
-    const card = jobCard(job);
-    card.querySelector("[data-copy]").addEventListener("click", () => {
-      navigator.clipboard.writeText(curlFor(job)).then(() => {
-        const b = card.querySelector("[data-copy]");
-        b.textContent = "copied!";
-        setTimeout(() => (b.textContent = "copy cURL"), 1200);
-      });
+  $("#emptyState").classList.toggle("hidden", jobs.length > 0);
+  list.innerHTML = jobs.map((j) => card(j, j.status === "QUEUED" || j.status === "PROCESSING")).join("");
+
+  // metrics
+  const done = jobs.filter((j) => j.status === "COMPLETED").length;
+  const failed = jobs.filter((j) => j.status === "FAILED").length;
+  const active = jobs.filter((j) => j.status === "QUEUED" || j.status === "PROCESSING").length;
+  const mDone = loadJobs().map((j) => j.doneMs).filter(Boolean);
+  $("#mTotal").textContent = jobs.length;
+  $("#mActive").textContent = active;
+  $("#mDone").textContent = done;
+  $("#mFailed").textContent = failed;
+  $("#mRate").textContent = done + failed ? Math.round((done / (done + failed)) * 100) + "%" : "–";
+  $("#mAvg").textContent = mDone.length ? (mDone.reduce((a, b) => a + b, 0) / mDone.length / 1000).toFixed(1) + "s" : "–";
+
+  // pipeline flow
+  const activeNodes = new Set(), busy = new Set();
+  let depth = 0;
+  for (const j of jobs) {
+    (j.stages || []).forEach((s) => {
+      if (s.status === "active" || s.status === "retrying") { activeNodes.add(s.name); if (s.name !== "ingest" && s.name !== "store" && s.name !== "queue") busy.add(j.worker); }
+      if (s.name === "queue" && s.status !== "done") depth++;
     });
-    list.appendChild(card);
+  }
+  $("#qDepth").textContent = depth;
+  $("#wBusy").textContent = `${busy.size || (active ? 1 : 0)}/4`;
+  document.querySelectorAll(".node").forEach((n) => {
+    n.classList.toggle("on", activeNodes.has(n.dataset.node) ||
+      (n.dataset.node === "client" && active > 0) ||
+      (n.dataset.node === "publish" && done > 0));
+  });
+  document.querySelectorAll(".link").forEach((l) => l.classList.toggle("on", active > 0));
+  const dots = $("#dots");
+  dots.innerHTML = "";
+  for (let i = 0; i < Math.min(6, active); i++) {
+    const d = document.createElement("span");
+    d.className = "dot-fly";
+    d.style.animationDuration = (2.6 + (i * 0.45 % 1.6)) + "s";
+    d.style.animationDelay = (i * 0.42) + "s";
+    d.style.bottom = (4 + (i * 13) % 22) + "px";
+    dots.appendChild(d);
   }
 }
 
-/* ---------------- polling loop ------------------------------------------ */
-let polling = null;
-function startPolling() {
-  if (polling) clearInterval(polling);
-  polling = setInterval(async () => {
-    const jobs = loadJobs().filter((j) => j.status === "QUEUED" || j.status === "PROCESSING");
-    if (!jobs.length) return;
-    await Promise.all(jobs.map(async (job) => {
-      const data = await pollJob(job);
-      if (data && data.status !== job.status) {
-        upsertJob({ ...job, status: data.status, error: data.error || null });
-      }
-    }));
-  }, 1000);
+/* ---------------- polling ------------------------------------------------- */
+async function tick() {
+  const active = loadJobs().filter((j) => j.status === "QUEUED" || j.status === "PROCESSING");
+  await Promise.all(active.map(async (job) => {
+    const data = await apiGet(job);
+    if (!data || !data.status) return;
+    diffEvents(job, data);
+    upsertJob({ ...data, doneMs: data.status === "COMPLETED" ? Date.now() - job.createdAt : job.doneMs });
+  }));
+  render();
 }
 
-/* ---------------- form -------------------------------------------------- */
-form.addEventListener("submit", async (e) => {
+/* ---------------- form / burst --------------------------------------------- */
+const SAMPLES = ["drone-4k-cut.mp4", "podcast-ep12.mp3", "keynote-master.mp4", "teaser-15s.mp4",
+  "product-render.png", "interview-camA.mp4", "bts-reel.mp4", "webinar-hq.webm", "trailer-v2.mp4", "b-roll-dusk.mp4"];
+
+async function submit(fileName, contentType) {
+  const chaos = +$("#chaos").value;
+  const simulate = Math.random() * 100 < chaos;
+  await apiPost(fileName, contentType, simulate);
+}
+
+$("#jobForm").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const err = $("#formError");
-  err.classList.add("hidden");
-  const btn = form.querySelector(".btn");
-  btn.disabled = true; btn.textContent = "Submitting…";
-  try {
-    await createJob(
-      $("#fileName").value.trim(),
-      $("#contentType").value,
-      $("#simulate").checked
-    );
-  } catch (ex) {
-    err.textContent = ex.message;
-    err.classList.remove("hidden");
-  } finally {
-    btn.disabled = false; btn.textContent = "Submit job";
+  $("#formError").classList.add("hidden");
+  try { await submit($("#fileName").value.trim() || "clip.mp4", $("#contentType").value); }
+  catch (ex) { const el = $("#formError"); el.textContent = ex.message; el.classList.remove("hidden"); }
+});
+
+$("#burstBtn").addEventListener("click", async () => {
+  const n = +$("#burstN").value;
+  const chaos = +$("#chaos").value;
+  log("info", `🚀 burst: launching ${n} jobs${chaos ? ` with ${chaos}% chaos` : ""}`);
+  const ctype = $("#contentType").value;
+  for (let i = 0; i < n; i++) {
+    setTimeout(() => submit(SAMPLES[i % SAMPLES.length], ctype).catch(() => {}), i * 160);
   }
 });
 
-/* ---------------- init -------------------------------------------------- */
-async function healthCheck() {
+$("#chaos").addEventListener("input", (e) => { $("#chaosVal").textContent = e.target.value + "%"; });
+
+/* ---------------- init ----------------------------------------------------- */
+async function health() {
   const h = $("#apiHealth");
   try {
     const res = await fetch(API, { method: "OPTIONS" });
-    h.innerHTML = res.status < 500
-      ? '<span class="dot ok"></span> API live'
-      : '<span class="dot bad"></span> API error';
-  } catch {
-    h.innerHTML = '<span class="dot bad"></span> API unreachable';
-  }
+    h.innerHTML = res.status < 500 ? '<span class="dot ok"></span> API live' : '<span class="dot bad"></span> API error';
+  } catch { h.innerHTML = '<span class="dot bad"></span> API unreachable'; }
 }
 
-const origin = location.origin;
-$("#curlPost").textContent =
-  `curl -X POST "${origin}/api/jobs" \\\n  -H "Content-Type: application/json" \\\n  -d '{"fileName":"video.mp4","contentType":"video/mp4"}'`;
-$("#curlGet").textContent =
-  `curl "${origin}/api/jobs/<jobId>?receipt=<receipt>"`;
-
+log("dim", "console attached · polling pipeline every 800ms");
 render();
-startPolling();
-healthCheck();
+tick();
+setInterval(tick, 800);
+health();

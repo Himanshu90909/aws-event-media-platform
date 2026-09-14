@@ -1,23 +1,26 @@
-"""Event Media Platform — single Vercel Python entrypoint.
+"""Event Media Platform — single Vercel Python entrypoint (v2: staged pipeline).
 
-Public API (unchanged from the AWS SAM contract):
+Public API (unchanged contract, richer payload):
   POST /api/jobs            -> 202 {"jobId","status":"QUEUED","objectKey","receipt"}
-  GET  /api/jobs/{jobId}    -> 200 job | 404 unknown | 400 invalid uuid
+  GET  /api/jobs/{jobId}    -> 200 job + stage timeline | 404 | 400
   GET  /api/jobs            -> 200 {jobs:[...]} warm-instance list
 
-AWS mapping (serverless, no external database):
-  - DynamoDB job record -> signed receipt (HMAC-SHA256 over the full record).
-    POST returns it; the client stores it and presents it as `?receipt=` on
-    status calls; GET verifies the signature before reconstructing state.
-  - SQS worker -> lazy timestamp-driven transitions
-    QUEUED -> PROCESSING -> COMPLETED | FAILED (conditional state machine).
-  - S3 private object -> stable objectKey reference media/{jobId}/{fileName}.
+Pipeline model (stateless, deterministic):
+  Each job walks a 7-stage media pipeline:
+    ingest -> store -> queue -> transcode -> thumbnail -> metadata -> publish
+  Stage durations are derived deterministically from a hash of the jobId
+  (every job looks different, zero stored state). The signed receipt is the
+  durable record (HMAC-SHA256); the status endpoint recomputes the full
+  timeline from (createdAt, elapsed).
 
-Vercel's Python runtime serves a single entrypoint per project, so the
-dynamic route is delivered via a vercel.json rewrite:
-  /api/jobs/(.+)  ->  /api/jobs?jobId=$1
-and this handler also accepts the path form directly when the runtime
-preserves it.
+  Failure mode ("simulate": "failure"): one seeded worker stage fails.
+  The worker retries up to 3 attempts (SQS-style redrive with backoff),
+  then the job is dead-lettered: status FAILED, attempts 3, DLQ.
+
+AWS mapping:
+  ingest/store/queue      -> API Gateway + Ingest Lambda + S3 + SQS   (status QUEUED)
+  transcode..publish      -> Worker Lambda fleet (worker-1..4)        (status PROCESSING)
+  3 failed attempts       -> SQS redrive policy -> DLQ                (status FAILED)
 """
 
 from __future__ import annotations
@@ -38,10 +41,11 @@ UUID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I
 )
 
-PROCESS_AFTER = 2.0    # seconds in QUEUED before the "worker" claims the job
-COMPLETE_AFTER = 6.0   # seconds total until processing finishes
+STAGES = ["ingest", "store", "queue", "transcode", "thumbnail", "metadata", "publish"]
+WORKER_FIRST = 3          # index of first worker stage
+MAX_ATTEMPTS = 3
+RETRY_DELAY = 1.2
 
-# Warm per-instance cache; signed receipts remain the source of truth
 _STORE: dict[str, dict] = {}
 _TMP_PATH = os.path.join("/tmp", "jobs.json")
 
@@ -79,25 +83,115 @@ def verify_receipt(receipt: str) -> dict | None:
         return None
 
 
-# ------------------------------------------------------------------ state
-def job_status(record: dict, now: float | None = None) -> tuple[str, str | None]:
-    """Lazily advance the state machine from signed timestamps.
-    Mirrors src/common/state.py transitions:
-    QUEUED -> PROCESSING -> COMPLETED | FAILED (terminal)."""
+# --------------------------------------------------------- deterministic plan
+def _seed_of(job_id: str) -> int:
+    return int(hashlib.md5(job_id.encode()).hexdigest()[:8], 16)
+
+
+def _rand(seed: int):
+    x = seed or 1
+    while True:  # deterministic LCG
+        x = (1664525 * x + 1013904223) % 2147483647
+        yield x / 2147483647
+
+
+def build_plan(job_id: str, simulate: bool) -> dict:
+    """Stage durations + failure point, derived from the jobId hash."""
+    r = _rand(_seed_of(job_id))
+    durs = [round(0.45 + 1.35 * next(r), 2) for _ in STAGES]
+    fail_stage = None
+    if simulate:
+        fail_stage = WORKER_FIRST + int(next(r) * 4)  # transcode..metadata
+    return {"durs": durs, "failStage": fail_stage}
+
+
+def worker_of(job_id: str) -> str:
+    return f"worker-{1 + _seed_of(job_id) % 4}"
+
+
+# --------------------------------------------------------- timeline compute
+def compute_timeline(record: dict, now: float | None = None) -> dict:
+    """Full pipeline state for a job at time `now` — stateless & deterministic."""
     now = now if now is not None else time.time()
+    plan = build_plan(record["jobId"], record.get("simulate") == "failure")
+    durs, fail_stage = plan["durs"], plan["failStage"]
     elapsed = now - float(record.get("createdAt", now))
-    if elapsed < PROCESS_AFTER:
-        return "QUEUED", None
-    if elapsed < COMPLETE_AFTER:
-        return "PROCESSING", None
-    if record.get("simulate") == "failure":
-        return "FAILED", "Simulated processing failure: worker exhausted retries (demo mode)"
-    return "COMPLETED", None
+    total = sum(durs)
+
+    stages, t, done_dur, current, failed_final = [], 0.0, 0.0, None, False
+    attempts_at_fail, fail_stage_status = 0, "pending"
+
+    for i, name in enumerate(STAGES):
+        dur = durs[i]
+        if elapsed < t:
+            stages.append({"name": name, "status": "pending", "attempts": 0, "duration": dur})
+            if fail_stage == i:
+                fail_stage_status = "pending"
+            continue
+        if fail_stage == i:
+            cycle = dur + RETRY_DELAY
+            a = min(MAX_ATTEMPTS, int((elapsed - t) / cycle) + 1)
+            run_end = t + (a - 1) * cycle + dur
+            if elapsed < run_end:  # attempt `a` currently executing
+                st = "active" if a == 1 else "retrying"
+                stages.append({"name": name, "status": st, "attempts": a, "duration": dur})
+                current, attempts_at_fail = i, a
+                fail_stage_status = st
+            elif a >= MAX_ATTEMPTS:  # third attempt finished -> dead-letter
+                stages.append({"name": name, "status": "failed", "attempts": MAX_ATTEMPTS, "duration": dur})
+                failed_final, attempts_at_fail = True, MAX_ATTEMPTS
+                fail_stage_status = "failed"
+            else:  # redrive pause between attempts
+                stages.append({"name": name, "status": "retrying", "attempts": a, "duration": dur})
+                current, attempts_at_fail = i, a
+                fail_stage_status = "retrying"
+            continue
+        # normal stage
+        if elapsed < t + dur:
+            stages.append({"name": name, "status": "active", "attempts": 1, "duration": dur})
+            current = i
+            break  # everything after is pending; fill below
+        stages.append({"name": name, "status": "done", "attempts": 1, "duration": dur})
+        done_dur += dur
+        t += dur
+
+    if len(stages) < len(STAGES):  # pad pending after break
+        for j in range(len(stages), len(STAGES)):
+            stages.append({"name": STAGES[j], "status": "pending", "attempts": 0, "duration": durs[j]})
+
+    # overall status + progress
+    if failed_final:
+        status, error = "FAILED", (
+            f"Stage '{STAGES[fail_stage]}' failed after {MAX_ATTEMPTS} attempts "
+            f"on {worker_of(record['jobId'])}; message moved to DLQ"
+        )
+        progress = 100.0
+    elif all(s["status"] == "done" for s in stages):
+        status, error, progress = "COMPLETED", None, 100.0
+    else:
+        active = next((s for s in stages if s["status"] in ("active", "retrying")), None)
+        if current is not None and current >= WORKER_FIRST:
+            status = "PROCESSING"
+        else:
+            status = "QUEUED"
+        error = None
+        if active and active["status"] == "active":
+            idx = STAGES.index(active["name"])
+            progress = min(99.0, (done_dur + (elapsed - sum(durs[:idx]))) / total * 100)
+        else:
+            progress = done_dur / total * 100
+
+    return {
+        "status": status,
+        "progress": round(progress, 1),
+        "stages": stages,
+        "worker": worker_of(record["jobId"]),
+        "error": error,
+    }
 
 
-# --------------------------------------------------------------- ingest
+# ---------------------------------------------------------------- endpoints
 def create_job(body: dict) -> tuple[int, dict]:
-    """Validate + create. Mirrors src/ingest/app.py."""
     file_name = body.get("fileName")
     content_type = body.get("contentType")
     if not isinstance(file_name, str) or not SAFE_NAME.fullmatch(file_name):
@@ -124,12 +218,9 @@ def create_job(body: dict) -> tuple[int, dict]:
     }
 
 
-# ---------------------------------------------------------------- status
 def get_job(job_id: str, receipt: str | None) -> tuple[int, dict]:
-    """Mirrors src/status/app.py: 200 | 404 | 400."""
     if not job_id or not UUID_RE.match(job_id):
         return 400, {"error": "jobId must be a valid UUID"}
-
     record = _STORE.get(job_id)
     if record is None and receipt:
         rebuilt = verify_receipt(receipt)
@@ -138,23 +229,23 @@ def get_job(job_id: str, receipt: str | None) -> tuple[int, dict]:
             _STORE[job_id] = rebuilt
     if record is None:
         return 404, {"error": "Job not found"}
-
-    status, error = job_status(record)
+    snap = compute_timeline(record)
     return 200, {
         "jobId": record["jobId"],
         "fileName": record["fileName"],
         "contentType": record["contentType"],
-        "status": status,
+        "status": snap["status"],
+        "progress": snap["progress"],
+        "stages": snap["stages"],
+        "worker": snap["worker"],
         "createdAt": record["createdAt"],
         "updatedAt": record["createdAt"],
         "objectKey": record["objectKey"],
-        "error": error,
+        "error": snap["error"],
     }
 
 
-# ---------------------------------------------------------------- storage
 def _flush() -> None:
-    """Best-effort warm-cache persistence (same instance only)."""
     try:
         with open(_TMP_PATH, "w") as f:
             json.dump(list(_STORE.values()), f)
@@ -172,6 +263,20 @@ def _load() -> None:
                     _STORE[rec["jobId"]] = rec
     except Exception:
         pass
+
+
+def list_jobs() -> dict:
+    _load()
+    jobs = []
+    for rec in _STORE.values():
+        snap = compute_timeline(rec)
+        jobs.append({
+            "jobId": rec["jobId"], "fileName": rec["fileName"],
+            "contentType": rec["contentType"], "objectKey": rec["objectKey"],
+            "createdAt": rec["createdAt"], **snap,
+        })
+    jobs.sort(key=lambda j: j["createdAt"], reverse=True)
+    return {"jobs": jobs, "count": len(jobs)}
 
 
 # ------------------------------------------------------------------ HTTP
@@ -213,8 +318,6 @@ class handler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
         query = parse_qs(parsed.query)
-
-        # dynamic route: /api/jobs/{jobId} (path form or rewrite-injected query)
         parts = [p for p in parsed.path.split("/") if p]
         job_id = ""
         if len(parts) >= 3 and parts[-2] == "jobs":
@@ -222,25 +325,7 @@ class handler(BaseHTTPRequestHandler):
         if not job_id:
             job_id = (query.get("jobId") or [""])[0]
         receipt = (query.get("receipt") or [None])[0]
-
         if job_id:
             _send(self, *get_job(job_id, receipt))
-            return
-
-        # list view (warm instance convenience)
-        _load()
-        jobs = []
-        for rec in _STORE.values():
-            status, error = job_status(rec)
-            jobs.append({
-                "jobId": rec["jobId"],
-                "fileName": rec["fileName"],
-                "contentType": rec["contentType"],
-                "status": status,
-                "createdAt": rec["createdAt"],
-                "updatedAt": rec["createdAt"],
-                "objectKey": rec["objectKey"],
-                "error": error,
-            })
-        jobs.sort(key=lambda j: j["createdAt"], reverse=True)
-        _send(self, 200, {"jobs": jobs, "count": len(jobs)})
+        else:
+            _send(self, 200, list_jobs())
