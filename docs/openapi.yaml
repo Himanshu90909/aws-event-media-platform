@@ -1,0 +1,42 @@
+openapi: 3.0.3
+info:
+  title: Event Media Platform API
+  version: 1.0.0
+  description: Backward-compatible asynchronous media job API.
+servers:
+  - url: http://localhost:8080
+paths:
+  /health:
+    get:
+      summary: Liveness probe
+      responses: {'200': {description: Healthy}}
+  /ready:
+    get:
+      summary: Readiness probe
+      responses: {'200': {description: Ready}}
+  /jobs:
+    post:
+      summary: Create an asynchronous media job
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [fileName, contentType]
+              properties:
+                fileName: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$'}
+                contentType: {type: string, maxLength: 127}
+                callbackUrl: {type: string, format: uri}
+      responses:
+        '202': {description: Job accepted}
+        '400': {description: Invalid request}
+  /jobs/{jobId}:
+    get:
+      summary: Get job status and processing timeline
+      parameters:
+        - {name: jobId, in: path, required: true, schema: {type: string, format: uuid}}
+      responses:
+        '200': {description: Job status}
+        '400': {description: Invalid job ID}
+        '404': {description: Job not found}

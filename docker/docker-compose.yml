@@ -1,0 +1,19 @@
+services:
+  media-api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        VCS_REF: ${GIT_COMMIT_SHA:-local}
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+      JOB_SIGNING_SECRET: ${JOB_SIGNING_SECRET:-local-development-only-change-me}
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL

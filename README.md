@@ -1,188 +1,153 @@
-# AWS Event-Driven Media Processing Platform
+# AWS Event-Driven Media Platform: Cloud Migration, Platform Engineering & DevSecOps
 
-A production-style, asynchronous media-job API built with AWS SAM. The API accepts metadata quickly, creates a durable job record, stores a private S3 object reference, and publishes a message for background processing. The worker is retry-safe and reports partial batch failures so SQS can retry failed messages and eventually redrive them to a dead-letter queue.
+A portfolio project that modernizes an existing asynchronous media-job platform without discarding its working serverless API. The repository demonstrates an incremental migration from AWS SAM/Lambda toward a hybrid platform with an optional containerized API on ECS/Fargate.
 
-## Project links
+> **Evidence boundary:** The SAM stack, container files, Terraform configuration, tests, scripts, and documentation are implemented in this repository. AWS resources, live traffic cutover, production benchmarks, and zero-downtime claims require an AWS account and are not claimed as completed here.
 
-- [Architecture documentation](docs/architecture.md)
-- [AWS SAM infrastructure](template.yaml)
-- [CI/CD workflow](.github/workflows/deploy.yml)
-- [Test suite](tests/test_platform.py)
+## What exists today
+
+- AWS SAM resources: API Gateway, three Lambdas, private/versioned S3, encrypted DynamoDB, SQS and DLQ.
+- Stable asynchronous contract: `POST /jobs` returns `202`; `GET /jobs/{jobId}` returns status.
+- Conditional DynamoDB state transitions and SQS partial-batch failure handling.
+- Vercel-compatible stdlib demo API and dashboard retained for local/portfolio use.
+- Non-root Docker image with health checks and local Compose profile.
+- Terraform ECS/Fargate/ECR/IAM/CloudWatch/autoscaling overlay; SAM remains the serverless source of truth.
+- Migration preflight, build, smoke-test and rollback helper script.
+- Contract and migration tests, OpenAPI contract, CI security and infrastructure checks.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  C[Client] --> API[API Gateway]
-  API --> I[Ingest Lambda - POST jobs]
-  I --> D[(DynamoDB - Job state)]
-  I --> S[Private S3 - Media objects]
-  I --> Q[SQS Processing Queue]
-  Q --> W[Worker Lambda]
+  C[Client] --> API[API Gateway or controlled ALB]
+  API --> ECS[ECS Fargate media API]
+  ECS --> Q[SQS processing queue]
+  Q --> W[Lambda worker]
+  ECS --> D[(DynamoDB job status)]
+  ECS --> S[(Private S3 media)]
   W --> D
   W --> S
-  Q -->|after 3 receives| DLQ[SQS Dead-Letter Queue]
-  API --> ST[Status Lambda - GET job status]
-  ST --> D
+  Q --> DLQ[SQS DLQ]
+  ECS --> CW[CloudWatch logs and metrics]
+  SAM[Existing SAM API] -. rollback / strangler coexistence .-> API
 ```
 
-## AWS services and rationale
+### Existing path and target path
 
-| Service | Purpose |
-|---|---|
-| API Gateway | Public REST boundary with separate asynchronous create and status routes. |
-| Lambda | Stateless ingest, status, and worker compute with no always-on servers. |
-| DynamoDB | Durable job state with conditional updates and pay-per-request billing. |
-| S3 | Private, encrypted, versioned object storage using `media/{jobId}/{fileName}` keys. |
-| SQS | Durable decoupling, retry delivery, visibility timeout, and backpressure. |
-| SQS DLQ | Isolates poison messages after three receives for investigation. |
-| CloudFormation/SAM | Reproducible infrastructure and least-privilege function policies. |
-| GitHub Actions + OIDC | Short-lived AWS authentication without long-lived AWS access keys. |
+| Boundary | Existing | Modernized target |
+|---|---|---|
+| API compute | API Gateway + ingest/status Lambda | ECS/Fargate API alongside SAM |
+| Async processing | SQS + worker Lambda | Preserved; independently scalable |
+| Metadata | DynamoDB | Preserved as system of record |
+| Media | Private S3 | Preserved; use presigned uploads for large files |
+| Observability | Lambda JSON logs + X-Ray | CloudWatch container logs, metrics and alarms |
+| Delivery | SAM deploy via OIDC | Immutable ECR image + controlled ECS promotion |
 
-## API
+See [the migration plan](docs/migration-plan.md), [OpenAPI contract](docs/openapi.yaml), and [architecture notes](docs/architecture.md).
 
-### `POST /jobs`
+## API contract
 
-Request:
+```bash
+curl -X POST http://localhost:8080/jobs \
+  -H 'Content-Type: application/json' \
+  -d '{"fileName":"video.mp4","contentType":"video/mp4"}'
 
-```json
-{"fileName":"video.mp4","contentType":"video/mp4"}
+curl http://localhost:8080/health
+curl http://localhost:8080/ready
+curl http://localhost:8080/jobs/<job-id>
 ```
 
-Returns HTTP `202`:
+The AWS SAM contract remains compatible with the original implementation. The local container uses the existing `api/index.py` handler and adds `/health` and `/ready`; it does not replace the SAM functions.
 
-```json
-{"jobId":"uuid","status":"QUEUED","objectKey":"media/uuid/video.mp4"}
-```
+## Local setup and tests
 
-The platform returns a stable object key. In a production upload flow, the next extension would be a presigned PUT URL so the client uploads directly to S3 without sending media through API Gateway.
-
-### `GET /jobs/{jobId}`
-
-Returns HTTP `200` with `jobId`, `fileName`, `contentType`, `status`, `createdAt`, `updatedAt`, `objectKey`, and `error`. It returns `404` for a missing job and `400` for an invalid UUID.
-
-## DynamoDB schema and state safety
-
-The table uses `jobId` as its partition key. The state machine is:
-
-`QUEUED -> PROCESSING -> COMPLETED` or `PROCESSING -> FAILED`.
-
-The worker uses `ConditionExpression #status = :expected` for every transition. If two SQS deliveries race, only one can claim `QUEUED -> PROCESSING`; the other treats the conditional failure as an idempotent duplicate. Terminal jobs are skipped. This matters because SQS provides at-least-once delivery, so duplicate messages are expected rather than exceptional.
-
-## SQS retries and DLQ
-
-The queue has a 180-second visibility timeout and a redrive policy with `maxReceiveCount: 3`. The worker returns `batchItemFailures` for records that raise exceptions, allowing Lambda/SQS to make the message visible again. After three unsuccessful receives, SQS moves it to the DLQ instead of silently losing it. The worker records useful errors in DynamoDB when it can; if the failure is a database outage, the raised exception preserves retry behavior.
-
-## Security model
-
-The S3 bucket blocks all public access, uses SSE-S3 encryption, versioning, and bucket-owner object ownership. Lambda functions use execution roles generated by SAM policies: ingest can write the table, bucket, and queue; status can read the table; worker can read/write the table and read the bucket. The GitHub deployment role is intended for a dedicated OIDC trust relationship. Do not commit credentials, `.env` files, or access keys.
-
-## Local development
-
-Requirements: Python 3.12, AWS SAM CLI, and Docker for local SAM emulation if desired.
+Requirements: Python 3.12. AWS SAM CLI and Docker are optional for local-only tests.
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements-dev.txt
-pytest
+pytest -q
 ruff check src tests
 sam validate --lint
 sam build
 ```
 
-The tests mock boto3 resources and do not require an AWS account. `events/` contains representative API Gateway and SQS payloads. To invoke locally after `sam build`, use `sam local invoke IngestFunction -e events/post-job.json`.
-
-## AWS deployment
+### Container workflow
 
 ```bash
-sam build
-sam deploy --guided
+export GIT_COMMIT_SHA="$(git rev-parse --short HEAD)"
+docker build --pull -t event-media-platform:$GIT_COMMIT_SHA -f docker/Dockerfile .
+docker run --rm -p 8080:8080 event-media-platform:$GIT_COMMIT_SHA
+# Or:
+docker compose -f docker/docker-compose.yml up --build
+curl http://localhost:8080/health
+docker compose -f docker/docker-compose.yml down --remove-orphans
 ```
 
-Choose a unique stack name and region. The deployment creates the API, three Lambdas, DynamoDB table, private S3 bucket, processing queue, DLQ, event source mapping, execution roles, and GitHub OIDC deployment role. The stack outputs the API URL, resource names, and deployment role ARN.
+The image runs as a non-root user, has a Docker health check, and the Compose profile uses a read-only root filesystem, dropped capabilities, and `/tmp` as a writable tmpfs. Local execution does not require paid AWS services.
 
-For a real upload workflow, use the returned object key with a future presigned-URL endpoint. The current worker performs a deterministic metadata inspection (`HeadObject`) as a safe, low-cost processing placeholder; the boundary is ready for ffmpeg or an external media service without changing the event contract.
+## Terraform migration layer
 
-## GitHub OIDC setup
+The Terraform module expects an existing VPC and private subnets. It intentionally does not create a second S3/DynamoDB/SQS system of record or destroy the existing SAM stack.
 
-1. Deploy the SAM stack once from a developer machine.
-2. In the GitHub repository, create an Actions secret named `AWS_DEPLOYMENT_ROLE_ARN` containing the stack output role ARN.
-3. Confirm the template `GitHubRepository` parameter exactly matches `OWNER/REPOSITORY` and `GitHubBranch` matches `main`.
-4. The workflow uses `id-token: write` and `aws-actions/configure-aws-credentials`; no AWS access key secret is needed.
+```bash
+cd infrastructure/terraform
+terraform init -backend=false
+terraform fmt -check
+terraform validate
+terraform plan \
+  -var='container_image=<account>.dkr.ecr.<region>.amazonaws.com/event-media-platform:<sha>' \
+  -var='vpc_id=vpc-...' \
+  -var='private_subnet_ids=["subnet-...","subnet-..."]'
+```
 
-If AWS deployment is not ready yet, leave the repository variable `AWS_DEPLOYMENT_ENABLED` unset or set to anything other than `true`. CI validation will still run while the deployment job remains skipped. When ready, set `AWS_DEPLOYMENT_ENABLED=true` and add the `AWS_DEPLOYMENT_ROLE_ARN` secret.
+For shared state, configure an encrypted S3 backend with locking in an environment-specific wrapper. Never commit `.tfstate`, credentials, or sensitive outputs.
 
-The example deployment role intentionally uses broad CloudFormation deployment actions to keep first-time SAM deployment reliable. For a hardened organization, replace it with a separate bootstrap role and a resource-scoped deployment policy.
+## Migration workflow
 
-## CI/CD
+```bash
+./scripts/migration/migrate.sh preflight
+./scripts/migration/migrate.sh build
+BASE_URL=http://localhost:8080 ./scripts/migration/migrate.sh smoke
+PREVIOUS_IMAGE=<known-good-image> ./scripts/migration/migrate.sh rollback
+```
 
-Pull requests run pytest, coverage, Ruff, `sam validate --lint`, and `sam build`. Pushes to `main` run the same checks and then deploy via OIDC. A failed test or validation prevents deployment.
+The intended strategy is strangler-style: deploy ECS dark, compare contract and processing behavior, shift selected traffic through a controlled route, observe, then expand. Roll back to the prior ECS image or SAM route if health, errors, latency, queue depth, or data consistency regress. No live cutover was run for this repository.
 
-## Observability and debugging
+## CI/CD and DevSecOps
 
-All handlers emit JSON-shaped CloudWatch log entries with `operation`, `status`, and `jobId` when available. For a failed job, inspect the job record first, then the worker log stream and SQS approximate receive count. For repeated failures, inspect the DLQ message and its original message attributes. API Gateway access logs and Lambda error metrics distinguish client validation errors from infrastructure errors. X-Ray tracing is enabled in SAM globals.
+[`platform-ci.yml`](.github/workflows/platform-ci.yml) runs on pull requests and main pushes:
 
-## Failure scenarios covered
+- Ruff, pytest, contract/migration tests, coverage.
+- SAM lint/build and Terraform format/init/validate.
+- Docker build, Trivy image/dependency scan and Gitleaks.
+- Optional SAM deployment with GitHub OIDC when `AWS_DEPLOYMENT_ENABLED=true`.
+- Optional immutable ECR publish when `AWS_CONTAINER_DEPLOYMENT_ENABLED=true`.
+- Concurrency control and a protected `production` environment prevent overlapping promotions.
 
-- Invalid JSON or missing/unsafe fields return `400`.
-- Missing job IDs return `404` or `400` as appropriate.
-- AWS client errors return a meaningful `503` from API handlers.
-- Worker exceptions return SQS batch failures, preserving retries.
-- Duplicate SQS deliveries are skipped after conditional state checks.
-- Conditional DynamoDB races do not overwrite a newer state.
-- Poison messages are isolated by the DLQ policy.
+Production deployment remains opt-in and should use protected environment approval, a resource-scoped role, and a separate infrastructure promotion step.
 
-## Cost considerations and trade-offs
+## Security and operations
 
-Pay-per-request DynamoDB, SQS, Lambda, and API Gateway keep low-volume student usage inexpensive. S3 is private and versioned, which improves recovery but adds storage cost for old versions; apply a lifecycle expiration policy for production data retention. The design favors managed services and at-least-once delivery over exactly-once processing. It uses a metadata processing step instead of bundling a large media codec into Lambda to reduce package size, cold starts, and cost.
+See [security checklist and threat model](docs/security.md), [operations runbook](docs/operations.md), and [rollback guide](docs/rollback.md). Key controls include private encrypted S3, DynamoDB recovery, SQS encryption/DLQ, least-privilege runtime roles, OIDC, immutable ECR tags, non-root containers, input validation, and no secrets in logs.
 
-## Future improvements
+## Cost and performance
 
-Add presigned upload URLs, S3 event notifications with an outbox/idempotency key, media transcoding via Step Functions or MediaConvert, authentication and per-user authorization, lifecycle policies, alarms for DLQ depth and worker errors, and a resource-scoped bootstrap/deployment role.
+The [cost analysis template](docs/cost-analysis.md) compares Lambda versus Fargate, API handling, storage, queueing, monitoring, network and operational complexity. It deliberately contains no invented benchmark or savings claim. Complete it with the region, workload, duration, concurrency, AWS Pricing Calculator assumptions and measured p50/p95 results.
 
-## Resume bullets
+## Known limitations and next steps
 
-- Built an AWS SAM event-driven media-processing platform with API Gateway, Python Lambda, DynamoDB, S3, SQS, and a dead-letter queue.
-- Implemented conditional DynamoDB state transitions and idempotent SQS worker handling for at-least-once delivery and duplicate events.
-- Automated pytest, Ruff, SAM validation/build, and OIDC-authenticated deployments through GitHub Actions without long-lived AWS keys.
-- Secured private, encrypted, versioned media storage and documented failure recovery, retry, observability, and cost trade-offs.
+- ECS routing through ALB/API Gateway, live canary traffic, and rollback drills need AWS deployment validation.
+- Authentication/authorization, malware scanning, upload size enforcement, and tenant isolation are not production-complete.
+- The media worker performs deterministic metadata inspection; integrate MediaConvert, ffmpeg in a sandbox, or Step Functions for real transformations.
+- Add an outbox/reconciliation process for the DynamoDB-before-SQS partial-failure window.
+- Add CloudWatch dashboards/alarms and load tests after selecting a representative workload.
 
-## Interview questions to prepare
+## Baseline and case study
 
-1. Why is SQS preferable to invoking the worker synchronously from the API Lambda?
-2. What exactly does the DynamoDB condition protect against during duplicate delivery?
-3. Why return `batchItemFailures` instead of failing the entire SQS batch?
-4. What happens if DynamoDB succeeds but SQS send fails after a job is created?
-5. How would you implement an outbox or reconciliation process for that partial failure?
-6. Why should a client upload media through a presigned S3 URL rather than API Gateway?
-7. How would you alarm on DLQ growth and distinguish transient from poison-message failures?
-8. Which IAM actions could be narrowed further for a production deployment role?
-9. When would you choose Step Functions or MediaConvert over a Lambda worker?
-10. What changes are required to support multiple users and authorization?
+The baseline on 2026-09-29 was **9 passing tests, Ruff passing, 90% coverage**. The detailed migration case study, risks, compatibility decisions and evidence boundary are in [docs/migration-plan.md](docs/migration-plan.md).
 
----
+## License
 
-## Vercel deployment (frontend + serverless backend)
-
-The repository is Vercel-ready — the same job API contract, ported from AWS SAM to Vercel serverless functions:
-
-| Piece | Location | AWS equivalent |
-|---|---|---|
-| Dashboard frontend | `index.html`, `app.js`, `style.css` | — (new) |
-| `POST /api/jobs` | `api/jobs.py` | Ingest Lambda + API Gateway |
-| `GET /api/jobs/{jobId}` | `api/jobs/[jobId].py` | Status Lambda + API Gateway |
-| Job record | signed receipt (HMAC-SHA256), returned by POST and verified on GET | DynamoDB item |
-| Async worker | lazy timestamp-driven transitions (QUEUED → PROCESSING → COMPLETED/FAILED) | SQS + worker Lambda |
-| Object reference | stable `media/{jobId}/{fileName}` objectKey | S3 private object |
-
-**Design note:** Vercel's runtime is stateless with no built-in database, so the DynamoDB record is replaced by a
-tamper-proof signed receipt: the POST response returns it, the client stores it (localStorage) and presents it on
-status calls, and the status endpoint verifies the HMAC before reconstructing state. This keeps the full
-conditional state machine, `202/200/400/404` contract, and failure semantics without any external database.
-
-**Deploy:** import this repository on [vercel.com/new](https://vercel.com/new) — zero configuration needed
-(`vercel.json` included). Optional: set a `JOB_SIGNING_SECRET` environment variable in the Vercel project settings.
-
-**Demo features:** live progress polling, state-machine visualization, simulated worker failure mode
-(`"simulate": "failure"`), copyable cURL commands per job.
+See the repository history and upstream project for licensing terms.

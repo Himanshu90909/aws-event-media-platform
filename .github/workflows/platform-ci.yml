@@ -1,0 +1,80 @@
+name: Platform CI/CD
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: platform-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  AWS_REGION: us-east-1
+  IMAGE: event-media-platform:${{ github.sha }}
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - uses: aws-actions/setup-sam@v2
+      - uses: hashicorp/setup-terraform@v3
+        with: {terraform_version: '1.9.8'}
+      - run: pip install -r requirements-dev.txt
+      - run: ruff check src tests
+      - run: pytest -q
+      - run: sam validate --lint
+      - run: sam build
+      - run: terraform -chdir=infrastructure/terraform fmt -check
+      - run: terraform -chdir=infrastructure/terraform init -backend=false
+      - run: terraform -chdir=infrastructure/terraform validate
+      - run: docker build --pull -t "$IMAGE" -f docker/Dockerfile .
+      - uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ${{ env.IMAGE }}
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: os,library
+      - uses: gitleaks/gitleaks-action@v2
+        env: {GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}}
+
+  deploy-serverless:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AWS_DEPLOYMENT_ENABLED == 'true'
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/setup-sam@v2
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOYMENT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - run: sam build
+      - run: sam deploy --stack-name aws-event-media-platform --region "$AWS_REGION" --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM --resolve-s3 --no-confirm-changeset --no-fail-on-empty-changeset --parameter-overrides GitHubRepository=${{ github.repository }} GitHubBranch=${{ github.ref_name }}
+
+  publish-container:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AWS_CONTAINER_DEPLOYMENT_ENABLED == 'true'
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOYMENT_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: ecr
+      - run: docker build --pull -t "${{ steps.ecr.outputs.registry }}/event-media-platform:${{ github.sha }}" -f docker/Dockerfile .
+      - run: docker push "${{ steps.ecr.outputs.registry }}/event-media-platform:${{ github.sha }}"
+      - run: echo "Published immutable image for ${{ github.sha }}; Terraform/ECS promotion is intentionally a separate controlled step."

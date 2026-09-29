@@ -1,0 +1,11 @@
+.git
+.github
+.aws-sam
+.pytest_cache
+.ruff_cache
+.venv
+__pycache__
+*.pyc
+.coverage
+.env
+terraform.tfstate*
