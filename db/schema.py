@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   salary_max numeric,
   salary_currency text,
   category text NOT NULL,
+  type text,
   skills jsonb DEFAULT '[]',
   posted_at timestamptz,
   expires_at timestamptz,
@@ -54,6 +55,9 @@ CREATE TABLE IF NOT EXISTS jobs (
   updated_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE (source, external_id)
 );
+-- migration: type column added post-launch
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS type text;
+
 CREATE INDEX IF NOT EXISTS jobs_live_idx ON jobs (expires_at, category, posted_at DESC);
 CREATE INDEX IF NOT EXISTS jobs_search_idx ON jobs USING gin (to_tsvector('simple', title || ' ' || company));
 

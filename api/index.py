@@ -71,6 +71,15 @@ _CB_OK: dict[str, bool] = {}   # warm-instance webhook delivery ledger
 _TMP_PATH = os.path.join("/tmp", "jobs.json")
 
 
+# --------------------------------------------------------- opportunity types
+JTYPES = ["JOB", "INTERNSHIP", "HACKATHON", "EVENT", "RESEARCH", "FELLOWSHIP",
+          "INNOVATION_LAB"]
+CATEGORY_TO_TYPE = {
+    "Internships": "INTERNSHIP", "Hackathons": "HACKATHON",
+    "Hiring Challenges": "HACKATHON", "Fellowships": "FELLOWSHIP",
+    "Events": "EVENT", "Research": "RESEARCH", "Innovation Labs": "INNOVATION_LAB",
+}
+
 # ------------------------------------------------------------------ crypto
 def _b64(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).decode().rstrip("=")
@@ -536,6 +545,140 @@ def _pg_ok() -> bool:
         return False
 
 
+# ------------------------------------------------------------- live discovery
+# Free public sources merged at request time (no API keys). Cached per
+# serverless instance to stay well inside source rate limits.
+_DISCOVER_TTL = 6 * 3600
+_discover_cache = {"ts": 0, "items": [], "sources": {}}
+
+
+def _mk_live(source, jtype, ext_id, title, company, location, remote_type, url,
+             skills, posted=None, description="", category=None):
+    jid = f"live-{source}-{ext_id}"
+    return {"id": jid, "external_id": str(ext_id), "source": source, "type": jtype,
+            "title": (title or "")[:140], "company": (company or "?")[:80],
+            "category": category or ("Hackathons" if jtype == "HACKATHON" else
+                                     "Internships" if jtype == "INTERNSHIP" else "Engineering"),
+            "skills": [sk.lower()[:24] for sk in (skills or [])][:6],
+            "location": (location or "Remote")[:80],
+            "remote_type": remote_type or "Remote",
+            "employment_type": "Internship" if jtype == "INTERNSHIP" else "Full-time",
+            "experience_level": "Mid",
+            "salary_min": None, "salary_max": None, "salary_currency": "USD",
+            "is_verified": False, "apply_url": url,
+            "posted_at": posted, "expires_at": time.time() + 30 * 86400,
+            "description": (description or "")[:400] or f"{title} — {company}. Live from {source}.",
+            "live": True}
+
+
+def _discover_live():
+    now = time.time()
+    if now - _discover_cache["ts"] < _DISCOVER_TTL:
+        return _discover_cache["items"], _discover_cache["sources"]
+    items, sources = [], {}
+    ok = lambda name: sources.update({name: True})
+    # Remotive — remote jobs (software-dev + data)
+    for cat, jtype in (("software-dev", "JOB"), ("data", "JOB")):
+        try:
+            d = _http_json(f"https://remotive.com/api/remote-jobs?category={cat}&limit=60", 8)
+            got = 0
+            for j in d.get("jobs", []):
+                items.append(_mk_live(
+                    "remotive", jtype, j.get("id"), j.get("title"), j.get("company_name"),
+                    j.get("candidate_required_location") or "Remote", "Remote", j.get("url"),
+                    (j.get("tags") or [])[:5], posted=_dt(j.get("publication_date")),
+                    description=(j.get("description") or "")[:400]))
+                got += 1
+            if got:
+                ok("remotive")
+        except Exception:
+            pass
+    # Arbeitnow — European job board (dev/data/AI roles only)
+    try:
+        d = _http_json("https://www.arbeitnow.com/api/job-board-api", 8)
+        got = 0
+        kw = ("developer", "engineer", "software", "data", "backend", "frontend",
+              "machine learning", "ai", "python", "java")
+        for j in d.get("data", []):
+            t = (j.get("title") or "").lower()
+            if not any(k in t for k in kw):
+                continue
+            items.append(_mk_live(
+                "arbeitnow", "JOB", j.get("slug"), j.get("title"), j.get("company_name"),
+                j.get("location"), "Remote" if j.get("remote") else "On-site", j.get("url"),
+                j.get("tags") or [], posted=(j.get("created_at") or 0) or None,
+                description=(j.get("description") or "")[:400]))
+            got += 1
+        if got:
+            ok("arbeitnow")
+    except Exception:
+        pass
+    # RemoteOK — remote dev jobs
+    try:
+        d = _http_json("https://remoteok.com/api", 8)
+        got = 0
+        for j in d[1:]:
+            if not isinstance(j, dict) or not j.get("position"):
+                continue
+            got += 1
+            items.append(_mk_live(
+                "remoteok", "JOB", j.get("id"), j.get("position"), j.get("company"),
+                j.get("location") or "Remote", "Remote", j.get("url"),
+                (j.get("tags") or [])[:5], posted=_dt(j.get("date"))))
+        if got:
+            ok("remoteok")
+    except Exception:
+        pass
+    # MLH — upcoming student hackathons (embedded JSON on season pages)
+    for season in ("2027", "2026"):
+        try:
+            req = urllib.request.Request(
+                f"https://mlh.io/seasons/{season}/events",
+                headers={"User-Agent": "Mozilla/5.0"})
+            html = urllib.request.urlopen(req, timeout=10).read().decode("utf-8", "replace")
+            m = re.search(r'application/json">(.*?)</script>', html, re.S)
+            if not m:
+                continue
+            evs = json.loads(m.group(1)).get("props", {}).get("upcomingEvents", [])
+            got = 0
+            for e in evs:
+                loc = e.get("location") or "Online"
+                rtype = "Remote" if e.get("isVirtual") or e.get("formatType") == "virtual" else "On-site"
+                url = e.get("websiteUrl") or ("https://mlh.io" + (e.get("url") or "/seasons/" + season + "/events"))
+                items.append(_mk_live(
+                    "mlh", "HACKATHON", e.get("slug") or e.get("id"), e.get("name"), "Major League Hacking",
+                    loc, rtype, url, ["hackathon", "students"],
+                    posted=_dt(e.get("startsAt")), category="Hackathons",
+                    description=(f"MLH {season} season hackathon — {e.get('name')} "
+                                 f"({e.get('dateRange')}) at {loc}.")))
+                got += 1
+            if got:
+                ok("mlh")
+                break  # 2027 season is the live one; stop after first success
+        except Exception:
+            pass
+    # de-dup by title+company
+    seen, uniq = set(), []
+    for it in items:
+        k = (it["title"].lower(), it["company"].lower())
+        if k in seen:
+            continue
+        seen.add(k)
+        uniq.append(it)
+    _discover_cache.update({"ts": now, "items": uniq, "sources": sources})
+    return uniq, sources
+
+
+def _dt(v):
+    """ISO/string date -> epoch seconds (best effort)."""
+    if not v:
+        return None
+    try:
+        return time.mktime(time.strptime((v or "")[:10], "%Y-%m-%d"))
+    except Exception:
+        return None
+
+
 # ------------------------------------------------------------------ crypto
 def _sign(payload: bytes, secret: str) -> str:
     return hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
@@ -607,7 +750,8 @@ class MemStore:
         jid = uuid.uuid4().hex
         now = time.time()
         self.jobs[jid] = {
-            "id": jid, "external_id": j.get("external_id"), "source": "seed",
+            "id": jid, "external_id": j.get("external_id"),
+            "source": j.get("source", "seed"), "type": j.get("type") or CATEGORY_TO_TYPE.get(j["category"], "JOB"),
             "title": j["title"], "company": j["company"], "company_logo_url": None,
             "description": j["description"], "apply_url": j.get("apply_url"),
             "employment_type": j.get("employment_type", "Full-time"),
@@ -670,6 +814,16 @@ class MemStore:
                                        f"measurable impact. Stack highlights: "
                                        f"{', '.join(row[3])}. Competitive compensation, "
                                        "learning budget and a strong review culture."))
+        try:  # curated catalog (real programs, all types) from api/opportunities.json
+            p = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "opportunities.json")
+            with open(p, "r", encoding="utf-8") as f:
+                for it in json.load(f).get("items", []):
+                    it = dict(it)
+                    it.setdefault("source", "curated")
+                    self._add_job(**it)
+        except Exception:
+            pass
 
     # -- users --------------------------------------------------------
     def upsert_user_identity(self, provider, subject, email, name, avatar):
@@ -716,9 +870,12 @@ class MemStore:
         self.users.pop(uid, None)
 
     # -- jobs queries -------------------------------------------------
-    def query_jobs(self, q, category, skill, location, remote, employment, experience, page, limit):
+    def query_jobs(self, q, category, skill, location, remote, employment, experience, page, limit,
+                   jtype=None):
         now = time.time()
         items = [j for j in self.jobs.values() if j["expires_at"] > now]
+        if jtype:
+            items = [j for j in items if j.get("type") == jtype]
         if q:
             ql = q.lower()
             items = [j for j in items if ql in j["title"].lower() or ql in j["company"].lower()
@@ -917,18 +1074,21 @@ class PgStore(MemStore):
                 "INSERT INTO jobs (id, external_id, source, title, company, description, apply_url,"
                 " employment_type, experience_level, location, remote_type, salary_min, salary_max,"
                 " salary_currency, category, skills, posted_at, expires_at, is_verified,"
-                " created_at, updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,"
-                "to_timestamp(%s), to_timestamp(%s), %s, to_timestamp(%s), to_timestamp(%s))",
+                " type, created_at, updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,"
+                "to_timestamp(%s), to_timestamp(%s), %s, %s, to_timestamp(%s), to_timestamp(%s))",
                 (row["id"], row["external_id"], row["source"], row["title"], row["company"],
                  row["description"], row["apply_url"], row["employment_type"],
                  row["experience_level"], row["location"], row["remote_type"], row["salary_min"],
                  row["salary_max"], row["salary_currency"], row["category"],
                  json.dumps(row["skills"]), row["posted_at"], row["expires_at"],
-                 row["is_verified"], now, now))
+                 row["is_verified"], row.get("type", "JOB"), now, now))
 
-    def query_jobs(self, q, category, skill, location, remote, employment, experience, page, limit):
+    def query_jobs(self, q, category, skill, location, remote, employment, experience, page, limit,
+                   jtype=None):
         sql = "SELECT * FROM jobs WHERE expires_at > now()"
         args = []
+        if jtype:
+            sql += " AND type = %s"; args.append(jtype)
         if q:
             sql += " AND (title ILIKE %s OR company ILIKE %s OR description ILIKE %s)"
             args += [f"%{q}%"] * 3
@@ -1015,7 +1175,7 @@ def envelope(data=None, meta=None, error=None):
 
 def job_public(j, saved=False):
     return {"id": j["id"], "title": j["title"], "company": j["company"],
-            "category": j["category"], "skills": j["skills"],
+            "category": j["category"], "type": j.get("type", "JOB"), "skills": j["skills"],
             "location": j["location"], "remoteType": j["remote_type"],
             "employmentType": j["employment_type"],
             "experienceLevel": j["experience_level"],
@@ -1023,7 +1183,8 @@ def job_public(j, saved=False):
             "salaryCurrency": j["salary_currency"], "isVerified": j["is_verified"],
             "postedAt": j["posted_at"], "expiresAt": j["expires_at"],
             "description": j["description"], "applyUrl": j.get("apply_url"),
-            "source": j["source"], "saved": saved}
+            "source": j["source"], "saved": saved,
+            "live": bool(j.get("live"))}
 
 
 class MFHandler(handler):
@@ -1338,6 +1499,40 @@ class MFHandler(handler):
             return self._send(404, envelope(None, error={"code": "NOT_FOUND",
                                                          "message": "Unknown /me route"}))
 
+        # ---------------- live discover ----------------
+        if head == "discover" and n == 1 and method == "GET":
+            page, limit = self._page(q)
+            g = lambda k: q.get(k, [None])[0]
+            jtype = g("type")
+            qq = g("q")
+            try:
+                live, sources = _discover_live()
+            except Exception:
+                live, sources = [], {}
+            try:
+                cat_items, _ = _store.query_jobs(qq, g("category"), g("skill"),
+                                                 g("location"), g("remote"),
+                                                 g("employmentType"), g("experience"),
+                                                 1, 200, jtype=jtype)
+            except Exception:
+                cat_items = []
+            merged = [job_public(j) for j in cat_items] + [job_public(j) for j in live]
+            if jtype:
+                merged = [m for m in merged if m.get("type") == jtype]
+            if qq:
+                ql = qq.lower()
+                merged = [m for m in merged
+                          if ql in m["title"].lower() or ql in m["company"].lower()
+                          or any(ql in sk.lower() for sk in m.get("skills", []))]
+            merged.sort(key=lambda m: (m.get("live") is True, -(m["postedAt"] or 0)))
+            total = len(merged)
+            start = (page - 1) * limit
+            return self._send(200, envelope(
+                {"jobs": merged[start:start + limit],
+                 "liveSources": sources, "liveCount": len(live),
+                 "types": JTYPES},
+                self._meta(page, limit, total)))
+
         # ---------------- jobs ----------------
         if head == "jobs":
             if n == 1 and method == "GET":
@@ -1346,7 +1541,7 @@ class MFHandler(handler):
                 items, total = _store.query_jobs(g("q"), g("category"), g("skill"),
                                                  g("location"), g("remote"),
                                                  g("employmentType"), g("experience"),
-                                                 page, limit)
+                                                 page, limit, jtype=g("type"))
                 uid = self._uid()
                 saved = set(_store.saved_jobs(uid)) if uid else set()
                 return self._send(200, envelope(

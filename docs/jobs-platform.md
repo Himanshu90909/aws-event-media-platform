@@ -106,3 +106,23 @@ pagination, save/unsave, idempotent apply, transition guards, status history,
 notes/next-action, notifications + read, presign allowlist/size limits, job detail +
 similar, **cross-user 404**, profile update, overview, account deletion, session
 revocation, health. `tests/test_jobs_platform.py` mirrors the core cases for CI.
+
+## Live opportunity discovery (`/api/mf/discover`)
+
+Every opportunity type on the platform is fed by two layers:
+
+1. **Runtime live sources** (free public APIs, no keys, merged per request,
+   cached 6 h per instance): Remotive (remote jobs), Arbeitnow (EU jobs),
+   RemoteOK (remote jobs), MLH (upcoming student hackathons, parsed from
+   the season pages' embedded JSON).
+2. **Curated catalog** (`api/opportunities.json`, real programs with
+   official links): internships (STEP, Engage, Amazon WOW, GRiD…),
+   hackathons (SIH, CodeVita, IEEE Xtreme…), events (GHC, re:Invent,
+   Google I/O, GTC…), research (GSoC, MITACS, DAAD WISE, SRFP, Charpak…),
+   innovation labs (MSR India, Google Research, MIT Media Lab, IBM, TCS…)
+   and fellowships (EF, YC, Startup School, Climatebase…).
+
+Jobs carry a `type` (JOB / INTERNSHIP / HACKATHON / EVENT / RESEARCH /
+FELLOWSHIP / INNOVATION_LAB); `/api/mf/jobs` and `/api/mf/discover` both
+accept an optional `type` filter. The `/careers` UI surfaces everything in
+the **Live feed** view with type chips.

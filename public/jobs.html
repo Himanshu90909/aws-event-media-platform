@@ -156,6 +156,7 @@ footer{border-top:1px solid var(--line);padding:26px 20px;text-align:center;colo
     <a class="logo" href="#/"><span class="mark">M</span> MediaFlow <span style="color:var(--mut);font-weight:500">Jobs</span></a>
     <div class="navlinks" id="navlinks">
       <a href="#/" data-v="discover">Discover</a>
+      <a href="#/live" data-v="live">Live feed</a>
       <a href="#/jobs" data-v="jobs">Jobs</a>
       <a href="#/challenges" data-v="challenges">Challenges</a>
       <a href="#/internships" data-v="internships">Internships</a>
@@ -172,7 +173,7 @@ footer{border-top:1px solid var(--line);padding:26px 20px;text-align:center;colo
   <section class="view" id="v-discover">
     <div class="hero">
       <h1>Find your next <span>software role</span></h1>
-      <p>Live opportunities across engineering, data, AI, security, PM and more.</p>
+      <p>Jobs, hackathons, events, research, internships & innovation labs — aggregated from real sources. Check the <a href="#/live" style="color:var(--acc)">Live feed</a>.</p>
       <div class="searchwrap">
         <input class="bigsearch" id="q1" placeholder="Search roles, companies, skills… (press Enter)">
         <div class="sug" id="sug1"></div>
@@ -188,6 +189,20 @@ footer{border-top:1px solid var(--line);padding:26px 20px;text-align:center;colo
   </section>
 
   <!-- JOBS LIST -->
+  <!-- LIVE FEED -->
+  <section class="view" id="v-live">
+    <h1 style="font-size:26px;font-weight:750;letter-spacing:-.5px">Live feed <span style="font-size:12px;color:var(--mut);font-weight:500">aggregated from real sources, refreshed hourly</span></h1>
+    <div class="filters" style="margin-top:14px">
+      <input id="lvQ" placeholder="Search jobs, hackathons, events, research…" style="min-width:260px" onkeydown="if(event.key==='Enter')Live.search(1)">
+      <button class="btn pri sm" onclick="Live.search(1)">Search</button>
+      <span id="lvStatus" style="font-size:12px;color:var(--mut)"></span>
+    </div>
+    <div class="chips" id="lvChips" style="justify-content:flex-start;margin-top:10px"></div>
+    <div class="grid g3" id="lvGrid" style="margin-top:16px"></div>
+    <div class="pager" id="lvPager"></div>
+  </section>
+
+  <!-- JOBS -->
   <section class="view" id="v-jobs">
     <h1 style="font-size:26px;font-weight:750;letter-spacing:-.5px" id="jobsTitle">All opportunities</h1>
     <div class="filters">
@@ -386,6 +401,32 @@ function jcardHTML(j){
   </div>`;
 }
 
+/* ------------------------- live feed --------------------------------- */
+const TYPES={JOB:"Jobs",INTERNSHIP:"Internships",HACKATHON:"Hackathons",EVENT:"Events",
+  RESEARCH:"Research",FELLOWSHIP:"Fellowships",INNOVATION_LAB:"Innovation labs"};
+const Live={type:"",page:1,
+  setType(t){Live.type=t;Views.live(1)},
+  search(p){Views.live(p)},
+  chips(){$("#lvChips").innerHTML=
+    `<button class="chip ${!Live.type?"on":""}" style="${!Live.type?"":""}" onclick="Live.setType('')">All types</button>`+
+    Object.entries(TYPES).map(([k,l])=>`<button class="chip ${Live.type===k?"on":""}" onclick="Live.setType('${k}')">${l}</button>`).join("");}
+};
+function liveCardHTML(j){
+  const src=(j.source||"").toUpperCase();
+  const open=j.live?`onclick="window.open('${(j.applyUrl||"").replace(/'/g,"%27")}','_blank')"`
+                   :`onclick="go('#/job/${j.id}')"`;
+  const tname=TYPES[j.type]||j.type||"Opportunity";
+  return `<div class="jcard" ${open}>
+    <div class="top"><div class="av">${esc(j.company[0]||"O")}</div>
+      <div><h3>${esc(j.title)}</h3><div class="co">${esc(j.company)}
+        ${j.live?'<span class="badge" style="background:rgba(99,102,241,.15);color:#a5b4fc">⚡ '+esc(src)+'</span>':(j.isVerified?'<span class="badge">✓ verified</span>':"")}</div></div></div>
+    <div class="meta"><span class="tag" style="background:rgba(99,102,241,.12)">${esc(tname)}</span><span class="tag">${esc(j.category)}</span><span class="tag">${esc(j.remoteType)}</span><span class="tag">${esc(j.location)}</span></div>
+    <div class="meta">${(j.skills||[]).slice(0,4).map(s=>`<span class="tag skill">${esc(s)}</span>`).join("")}</div>
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <span class="sal">${fmtSal(j)}</span><span class="days">${j.live?"live now":daysLeft(j.expiresAt)}</span></div>
+  </div>`;
+}
+
 /* ------------------------- views ------------------------------------- */
 const Views={
   async discover(){
@@ -398,6 +439,24 @@ const Views={
       $("#soonJobs").innerHTML=soon.map(jcardHTML).join("")||`<div class="empty">Nothing closing this week.</div>`;
       $("#newJobs").innerHTML=all.slice(0,4).map(jcardHTML).join("")||`<div class="empty">Nothing new.</div>`;
     }catch(e){$("#featJobs").innerHTML=`<div class="empty">${esc(e.message)}</div>`}
+  },
+  async live(page=1){
+    Live.page=page;Live.chips();
+    const params=new URLSearchParams();params.set("page",page);params.set("limit",12);
+    const q=$("#lvQ").value.trim();if(q)params.set("q",q);
+    if(Live.type)params.set("type",Live.type);
+    $("#lvGrid").innerHTML=`<div class="empty">Fetching live opportunities from connected sources…</div>`;
+    try{
+      const r=await api("/discover?"+params.toString());
+      const jobs=r.data.jobs||[];
+      $("#lvGrid").innerHTML=jobs.map(liveCardHTML).join("")||`<div class="empty">Nothing found — try another type or clear the search.</div>`;
+      const total=r.meta.total,pages=Math.ceil(total/12);
+      const srcs=Object.keys(r.data.liveSources||{}).map(s=>s.toUpperCase()).join(" · ");
+      $("#lvStatus").textContent=(r.data.liveCount?`${r.data.liveCount} live`:"")+(srcs?` from ${srcs}`:"");
+      $("#lvPager").innerHTML=(pages>1?`<button class="btn gh sm" ${page<=1?"disabled":""} onclick="Live.search(${page-1})">← Prev</button>`:"")+
+        `<span>Page ${page} of ${pages} · ${total} opportunities</span>`+
+        (pages>1?`<button class="btn gh sm" ${page>=pages?"disabled":""} onclick="Live.search(${page+1})">Next →</button>`:"");
+    }catch(e){$("#lvGrid").innerHTML=`<div class="empty">${esc(e.message)}</div>`;$("#lvStatus").textContent=""}
   },
   async jobs(page=1,cat=null){
     cat=cat||Jobs.cat;const params=new URLSearchParams();
@@ -594,6 +653,7 @@ const Router={
       else if(Router.v!=="jobs")Jobs.cat=null;
       $("#jobsTitle").textContent=parts[0]==="challenges"?"Challenges & hackathons":parts[0]==="internships"?"Internships & fellowships":"All opportunities";
     }
+    else if(parts[0]==="live")v="live";
     else if(parts[0]==="applications")v="applications";
     else if(parts[0]==="notifications")v="notifications";
     else if(parts[0]==="profile")v="profile";
@@ -602,6 +662,7 @@ const Router={
     UI.nav(v==="detail"||v==="jobs"?(parts[0]==="challenges"?"challenges":parts[0]==="internships"?"internships":"jobs"):v);
     if(v==="discover")Views.discover();
     if(v==="jobs")Views.jobs(1,Jobs.cat);
+    if(v==="live")Views.live(1);
     if(v==="detail")Views.detail(arg);
     if(v==="applications")Views.applications();
     if(v==="notifications")Views.notifications();

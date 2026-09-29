@@ -6,6 +6,7 @@ presign validation, and store behavior. Runs against the explicit
 in-memory DEV store (no DATABASE_URL in CI).
 """
 import importlib.util
+import json
 import os
 import uuid
 
@@ -119,3 +120,45 @@ def test_account_deletion_cascades(store, user, job):
     assert store.get_user(user) is None
     assert store.applications(user, page=1, limit=100)[1] == 0
     assert store.notifications(user) == []
+
+
+# ------------------------------------------------------------------ types
+def test_catalog_file_valid():
+    p = os.path.join(REPO, "api", "opportunities.json")
+    data = json.load(open(p, encoding="utf-8"))
+    items = data["items"]
+    assert len(items) >= 25
+    for it in items:
+        assert it["type"] in mp.JTYPES, it.get("title")
+        assert it["title"] and it["company"] and it["category"]
+        assert it["apply_url"].startswith("https://"), it["title"]
+        assert it["description"].strip()
+
+
+def test_types_present_after_seed():
+    s = mp.MemStore()
+    types = {j.get("type") for j in s.jobs.values()}
+    for needed in ("INTERNSHIP", "HACKATHON", "EVENT", "RESEARCH",
+                   "FELLOWSHIP", "INNOVATION_LAB"):
+        assert needed in types, needed
+
+
+def test_type_filter(store, job):
+    s = mp.MemStore()
+    items, total = s.query_jobs(None, None, None, None, None, None, None, 1, 200,
+                                jtype="INTERNSHIP")
+    assert total >= 1
+    assert all(j["type"] == "INTERNSHIP" for j in items)
+    # the pre-existing seed rows default to JOB
+    items, total = s.query_jobs(None, None, None, None, None, None, None, 1, 200,
+                                jtype="JOB")
+    assert total >= 1 and all(j["type"] == "JOB" for j in items)
+
+
+def test_mk_live_shape():
+    it = mp._mk_live("test", "HACKATHON", "x1", "Test Hack", "Acme",
+                    "Online", "Remote", "https://acme.dev", ["python"],
+                    posted=1700000000, description="d")
+    pub = mp.job_public(it)
+    assert pub["type"] == "HACKATHON" and pub["live"] is True
+    assert pub["applyUrl"] == "https://acme.dev"
