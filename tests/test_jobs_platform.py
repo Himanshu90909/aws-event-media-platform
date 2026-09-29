@@ -27,7 +27,7 @@ def store():
 
 @pytest.fixture()
 def user(store):
-    uid, u, _ = store.upsert_user_identity("google", "sub-1", "a@x.dev", "A", None)
+    uid, _u, _rest = store.upsert_user_identity("google", "sub-1", "a@x.dev", "A", None)
     return uid
 
 
@@ -125,7 +125,8 @@ def test_account_deletion_cascades(store, user, job):
 # ------------------------------------------------------------------ types
 def test_catalog_file_valid():
     p = os.path.join(REPO, "api", "opportunities.json")
-    data = json.load(open(p, encoding="utf-8"))
+    with open(p, encoding="utf-8") as f:
+        data = json.load(f)
     items = data["items"]
     assert len(items) >= 25
     for it in items:
