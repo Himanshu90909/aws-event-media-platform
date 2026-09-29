@@ -1044,16 +1044,13 @@ class MemStore:
 
 
 class PgStore(MemStore):
-    """PostgreSQL adapter (durable). Requires DATABASE_URL + psycopg2.
-
-    Implements the same interface; all mutating calls write through to
-    Postgres. Kept intentionally compact: the schema in db/schema.sql
-    matches the spec's core data model.
-    """
+    """PostgreSQL adapter (durable). All reads and writes go through Postgres;
+    the inherited in-memory dicts are only the seed source for first boot."""
     ephemeral = False
 
     def __init__(self):
-        super().__init__()          # seeds fallback dict (used only if pg fails)
+        super().__init__()          # seed source (used only for first-boot seeding)
+        del self.__dict__["files"]  # un-shadow the files() method defined below
         import psycopg2
         self.pg = psycopg2.connect(DATABASE_URL)
         self.pg.autocommit = True
@@ -1062,6 +1059,7 @@ class PgStore(MemStore):
 
     def _q(self, sql, args=()):
         import datetime as _dt
+        from decimal import Decimal
         with self.pg.cursor() as cur:
             cur.execute(sql, args)
             if cur.description:
@@ -1074,6 +1072,8 @@ class PgStore(MemStore):
                             v = v.timestamp()          # epoch float, matches in-memory format
                         elif isinstance(v, _dt.date):
                             v = v.isoformat()
+                        elif isinstance(v, Decimal):
+                            v = float(v)
                         row[c] = v
                     rows.append(row)
                 return rows
@@ -1094,7 +1094,8 @@ class PgStore(MemStore):
                 " employment_type, experience_level, location, remote_type, salary_min, salary_max,"
                 " salary_currency, category, skills, posted_at, expires_at, is_verified,"
                 " type, created_at, updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,"
-                "to_timestamp(%s), to_timestamp(%s), %s, %s, to_timestamp(%s), to_timestamp(%s))",
+                "to_timestamp(%s), to_timestamp(%s), %s, %s, to_timestamp(%s), to_timestamp(%s))"
+                " ON CONFLICT (source, external_id) DO NOTHING",
                 (row["id"], row["external_id"], row["source"], row["title"], row["company"],
                  row["description"], row["apply_url"], row["employment_type"],
                  row["experience_level"], row["location"], row["remote_type"], row["salary_min"],
@@ -1128,6 +1129,214 @@ class PgStore(MemStore):
         args += [limit, (page - 1) * limit]
         rows = self._q(sql, args)
         return rows, total
+
+    # ---------------- users -------------------------------------------
+    def upsert_user_identity(self, provider, subject, email, name, avatar):
+        rows = self._q("SELECT u.* FROM identities i JOIN users u ON u.id = i.user_id "
+                       "WHERE i.provider = %s AND i.provider_subject = %s", (provider, subject))
+        if rows:
+            uid = rows[0]["id"]
+            self._q("UPDATE users SET email = COALESCE(%s, email), "
+                    "display_name = COALESCE(NULLIF(%s, ''), display_name), "
+                    "avatar_url = COALESCE(%s, avatar_url), updated_at = now() WHERE id = %s",
+                    (email or None, name or None, avatar or None, uid))
+            return uid, self._q("SELECT * FROM users WHERE id = %s", (uid,))[0], False
+        uid = str(uuid.uuid4())
+        self._q("INSERT INTO users (id, email, display_name, avatar_url) VALUES (%s,%s,%s,%s)",
+                (uid, (email or "").lower() or f"u{uid[:8]}@placeholder.local", name or "", avatar))
+        self._q("INSERT INTO identities (id, user_id, provider, provider_subject, provider_email) "
+                "VALUES (%s,%s,%s,%s,%s)",
+                (str(uuid.uuid4()), uid, provider, subject, email))
+        return uid, self._q("SELECT * FROM users WHERE id = %s", (uid,))[0], True
+
+    def get_user(self, uid):
+        try:
+            rows = self._q("SELECT * FROM users WHERE id = %s", (uid,))
+        except Exception:
+            return None
+        return rows[0] if rows else None
+
+    def update_user(self, uid, patch):
+        if not self.get_user(uid):
+            return None
+        sets, args = [], []
+        for k in ("display_name", "headline", "location", "bio", "profile_visibility"):
+            if k in patch:
+                sets.append(f"{k} = %s"); args.append(str(patch[k])[:2000])
+        if sets:
+            sets.append("updated_at = now()")
+            args.append(uid)
+            self._q("UPDATE users SET " + ", ".join(sets) + " WHERE id = %s", args)
+        return self.get_user(uid)
+
+    def delete_user(self, uid):
+        self._q("DELETE FROM audit_events WHERE user_id = %s", (uid,))
+        self._q("DELETE FROM users WHERE id = %s", (uid,))  # FKs cascade
+
+    # ---------------- job lookups --------------------------------------
+    def get_job(self, jid):
+        try:
+            rows = self._q("SELECT * FROM jobs WHERE id = %s", (jid,))
+        except Exception:
+            return None
+        return rows[0] if rows else None
+
+    def similar_jobs(self, jid, limit=6):
+        j = self.get_job(jid)
+        if not j:
+            return []
+        pool = self._q("SELECT * FROM jobs WHERE id <> %s AND expires_at > now()", (jid,))
+        pool.sort(key=lambda x: (x["category"] != j["category"],
+                                 -len(set(x["skills"] or []) & set(j["skills"] or []))))
+        return pool[:limit]
+
+    # ---------------- saved ---------------------------------------------
+    def save_job(self, uid, jid, note=""):
+        self._q("INSERT INTO saved_jobs (user_id, job_id, note) VALUES (%s,%s,%s) "
+                "ON CONFLICT (user_id, job_id) DO UPDATE SET note = EXCLUDED.note",
+                (uid, jid, note or ""))
+        return True
+
+    def unsave_job(self, uid, jid):
+        self._q("DELETE FROM saved_jobs WHERE user_id = %s AND job_id = %s", (uid, jid))
+
+    def saved_jobs(self, uid):
+        return self._q("SELECT job_id, note, created_at FROM saved_jobs WHERE user_id = %s",
+                       (uid,))
+
+    def is_saved(self, uid, jid):
+        return bool(self._q("SELECT 1 AS x FROM saved_jobs WHERE user_id = %s AND job_id = %s",
+                            (uid, jid)))
+
+    # ---------------- applications ---------------------------------------
+    def create_application(self, uid, jid):
+        rows = self._q("SELECT * FROM applications WHERE user_id = %s AND job_id = %s", (uid, jid))
+        if rows:
+            return rows[0], False
+        aid = str(uuid.uuid4())
+        self._q("INSERT INTO applications (id, user_id, job_id, status, status_history) "
+                "VALUES (%s,%s,%s,'SAVED',%s::jsonb)",
+                (aid, uid, jid, json.dumps([{"status": "SAVED", "at": time.time()}])))
+        return self.get_application(aid), True
+
+    def get_application(self, aid):
+        try:
+            rows = self._q("SELECT * FROM applications WHERE id = %s", (aid,))
+        except Exception:
+            return None
+        return rows[0] if rows else None
+
+    def applications(self, uid, status=None, page=1, limit=20):
+        sql = "SELECT * FROM applications WHERE user_id = %s"
+        args = [uid]
+        if status:
+            sql += " AND status = %s"; args.append(status)
+        total = self._q("SELECT count(*) AS n FROM (" + sql + ") t", args)[0]["n"]
+        sql += " ORDER BY updated_at DESC LIMIT %s OFFSET %s"
+        args += [limit, (page - 1) * limit]
+        return self._q(sql, args), total
+
+    def update_application(self, aid, patch):
+        a = self.get_application(aid)
+        if not a:
+            return None, "NOT_FOUND"
+        if "status" in patch and patch["status"] != a["status"]:
+            if patch["status"] not in TRANSITIONS.get(a["status"], set()):
+                return None, "INVALID_TRANSITION"
+            hist = (a["status_history"] or []) + [{"status": patch["status"], "at": time.time()}]
+            self._q("UPDATE applications SET status = %s, status_history = %s::jsonb, "
+                    "applied_at = CASE WHEN %s = 'APPLIED' THEN now() ELSE applied_at END, "
+                    "updated_at = now() WHERE id = %s",
+                    (patch["status"], json.dumps(hist), patch["status"], aid))
+        sets, args = [], []
+        for k in ("next_action", "private_notes"):
+            if k in patch:
+                sets.append(f"{k} = %s"); args.append(str(patch[k])[:4000])
+        if "next_action_at" in patch:
+            if patch["next_action_at"]:
+                sets.append("next_action_at = to_timestamp(%s)")
+                args.append(float(patch["next_action_at"]))
+            else:
+                sets.append("next_action_at = NULL")
+        if sets:
+            sets.append("updated_at = now()")
+            args.append(aid)
+            self._q("UPDATE applications SET " + ", ".join(sets) + " WHERE id = %s", args)
+        return self.get_application(aid), None
+
+    def delete_application(self, aid):
+        self._q("DELETE FROM applications WHERE id = %s", (aid,))
+
+    # ---------------- files ------------------------------------------------
+    def create_file(self, uid, application_id, object_key, file_name, content_type, size):
+        fid = str(uuid.uuid4())
+        self._q("INSERT INTO files (id, user_id, application_id, object_key, file_name, "
+                "content_type, size_bytes, processing_status) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,'QUEUED')",
+                (fid, uid, application_id, object_key, file_name, content_type, size))
+        return self.get_file(uid, fid)
+
+    def files(self, uid):
+        return self._q("SELECT * FROM files WHERE user_id = %s ORDER BY created_at DESC", (uid,))
+
+    def get_file(self, uid, fid):
+        try:
+            rows = self._q("SELECT * FROM files WHERE id = %s AND user_id = %s", (fid, uid))
+        except Exception:
+            return None
+        return rows[0] if rows else None
+
+    def update_file_status(self, uid, fid, status):
+        if not self.get_file(uid, fid):
+            return None
+        self._q("UPDATE files SET processing_status = %s, updated_at = now() WHERE id = %s",
+                (status, fid))
+        return self.get_file(uid, fid)
+
+    # ---------------- notifications ----------------------------------------
+    def notify(self, uid, ntype, title, body):
+        dup = self._q("SELECT 1 AS x FROM notifications WHERE user_id = %s AND type = %s "
+                      "AND title = %s AND created_at > now() - interval '24 hours'",
+                      (uid, ntype, title))
+        if dup:
+            return None  # deduplicated within 24h
+        nid = str(uuid.uuid4())
+        self._q("INSERT INTO notifications (id, user_id, type, title, body) "
+                "VALUES (%s,%s,%s,%s,%s)", (nid, uid, ntype, title, body))
+        return self._q("SELECT * FROM notifications WHERE id = %s", (nid,))[0]
+
+    def notifications(self, uid):
+        return self._q("SELECT * FROM notifications WHERE user_id = %s ORDER BY created_at DESC",
+                       (uid,))
+
+    def read_notification(self, uid, nid):
+        try:
+            rows = self._q("UPDATE notifications SET read_at = now() "
+                           "WHERE id = %s AND user_id = %s RETURNING *", (nid, uid))
+        except Exception:
+            return None
+        return rows[0] if rows else None
+
+    # ---------------- audit ---------------------------------------------------
+    def audit_event(self, uid, event_type, request_id, metadata=None):
+        try:
+            self._q("INSERT INTO audit_events (id, user_id, event_type, request_id, metadata) "
+                    "VALUES (%s,%s,%s,%s,%s::jsonb)",
+                    (str(uuid.uuid4()), uid, event_type, request_id, json.dumps(metadata or {})))
+        except Exception:
+            pass
+
+    # ---------------- stats ------------------------------------------------------
+    def overview(self):
+        live = "expires_at > now()"
+        n = self._q(f"SELECT count(*) AS n FROM jobs WHERE {live}")[0]["n"]
+        cats = [r["category"] for r in self._q(
+            f"SELECT DISTINCT category FROM jobs WHERE {live} ORDER BY category")]
+        v = self._q(f"SELECT count(*) AS n FROM jobs WHERE {live} AND is_verified")[0]["n"]
+        c = self._q(f"SELECT count(*) AS n FROM jobs WHERE {live} "
+                    "AND expires_at < now() + interval '7 days'")[0]["n"]
+        return {"jobs_live": n, "categories": len(cats), "category_list": cats,
+                "verified": v, "closing_soon": c}
 
 
 _store = MemStore()
