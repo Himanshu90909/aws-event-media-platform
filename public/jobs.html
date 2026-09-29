@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="MediaFlow Jobs — LinkedIn/Unstop-style software careers platform: live opportunities, application pipeline, resume processing.">
+<title>MediaFlow Jobs — Software Careers Platform</title>
+<style>
+:root{
+  --bg:#000;--card:#0c0c10;--card2:#121218;--line:#1f1f26;--line2:#2a2a33;
+  --txt:#f2f2f5;--mut:#8b8b96;--dim:#5c5c66;
+  --ind:#6366f1;--pur:#a855f7;--grad:linear-gradient(135deg,#6366f1,#a855f7);
+  --ok:#10b981;--warn:#f59e0b;--bad:#ef4444;
+  --r:14px;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--txt);font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;line-height:1.55;-webkit-font-smoothing:antialiased}
+a{color:inherit;text-decoration:none}
+button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
+input,textarea,select{font-family:inherit;color:var(--txt);background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:14px;outline:none;width:100%}
+input:focus,textarea:focus,select:focus{border-color:var(--ind)}
+::placeholder{color:var(--dim)}
+
+/* nav */
+header{position:sticky;top:0;z-index:50;background:rgba(0,0,0,.82);backdrop-filter:blur(14px);border-bottom:1px solid var(--line)}
+.nav{max-width:1180px;margin:0 auto;padding:0 20px;height:62px;display:flex;align-items:center;gap:18px}
+.logo{display:flex;align-items:center;gap:9px;font-weight:700;font-size:17px;letter-spacing:-.3px;white-space:nowrap}
+.logo .mark{width:26px;height:26px;border-radius:8px;background:var(--grad);display:grid;place-items:center;font-size:13px;color:#fff}
+.navlinks{display:flex;gap:2px;overflow-x:auto;flex:1;scrollbar-width:none}
+.navlinks::-webkit-scrollbar{display:none}
+.navlinks a{padding:7px 12px;border-radius:9px;color:var(--mut);font-size:13.5px;font-weight:500;white-space:nowrap;transition:.15s}
+.navlinks a:hover{color:var(--txt);background:var(--card2)}
+.navlinks a.on{color:var(--txt);background:var(--card2)}
+.bell{position:relative;padding:8px;border-radius:9px;color:var(--mut)}
+.bell:hover{color:var(--txt);background:var(--card2)}
+.bell .dot{position:absolute;top:5px;right:5px;min-width:16px;height:16px;border-radius:9px;background:var(--pur);font-size:10px;font-weight:700;display:none;place-items:center;padding:0 4px}
+.bell.has .dot{display:grid}
+.btn{padding:9px 16px;border-radius:10px;font-size:13.5px;font-weight:600;transition:.15s;white-space:nowrap}
+.btn.pri{background:var(--grad);color:#fff}
+.btn.pri:hover{filter:brightness(1.15)}
+.btn.gh{border:1px solid var(--line2);color:var(--txt)}
+.btn.gh:hover{background:var(--card2)}
+.btn.sm{padding:6px 11px;font-size:12.5px;border-radius:8px}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+
+/* layout */
+main{max-width:1180px;margin:0 auto;padding:26px 20px 90px}
+.view{display:none;animation:fade .18s ease}
+.view.on{display:block}
+@keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1}}
+.grid{display:grid;gap:14px}
+.g2{grid-template-columns:1fr 1fr}
+.g3{grid-template-columns:repeat(3,1fr)}
+.g4{grid-template-columns:repeat(4,1fr)}
+@media(max-width:900px){.g3,.g4{grid-template-columns:1fr 1fr}}
+@media(max-width:600px){.g2,.g3,.g4{grid-template-columns:1fr}}
+
+/* hero */
+.hero{padding:52px 0 8px;text-align:center}
+.hero h1{font-size:clamp(30px,5vw,46px);font-weight:800;letter-spacing:-1px;line-height:1.12}
+.hero h1 span{background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+.hero p{color:var(--mut);margin-top:12px;font-size:15.5px}
+.searchwrap{max-width:680px;margin:26px auto 0;position:relative}
+.bigsearch{padding:15px 18px;border-radius:16px;font-size:15.5px;background:var(--card);border:1px solid var(--line2)}
+.sug{position:absolute;left:0;right:0;top:calc(100% + 6px);background:var(--card);border:1px solid var(--line2);border-radius:12px;overflow:hidden;display:none;text-align:left;box-shadow:0 18px 50px rgba(0,0,0,.6)}
+.sug.on{display:block}
+.sug div{padding:10px 15px;font-size:13.5px;color:var(--mut);cursor:pointer}
+.sug div:hover{background:var(--card2);color:var(--txt)}
+
+/* chips */
+.chips{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:20px}
+.chip{padding:7px 13px;border-radius:999px;border:1px solid var(--line2);color:var(--mut);font-size:12.5px;font-weight:500;transition:.15s}
+.chip:hover,.chip.on{color:#fff;border-color:transparent;background:var(--grad)}
+.filters{display:flex;gap:10px;flex-wrap:wrap;margin:18px 0}
+.filters select,.filters input{width:auto;min-width:140px;font-size:13px}
+
+/* cards */
+.jcard{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:18px;display:flex;flex-direction:column;gap:10px;transition:.15s;cursor:pointer;position:relative}
+.jcard:hover{border-color:var(--ind);transform:translateY(-2px)}
+.jcard .top{display:flex;gap:12px;align-items:center}
+.jcard .av{width:42px;height:42px;border-radius:11px;background:var(--grad);display:grid;place-items:center;font-weight:800;font-size:16px;color:#fff;flex-shrink:0}
+.jcard h3{font-size:15px;font-weight:650;letter-spacing:-.2px}
+.jcard .co{font-size:12.5px;color:var(--mut)}
+.jcard .meta{display:flex;gap:6px;flex-wrap:wrap}
+.tag{font-size:11px;padding:3px 9px;border-radius:999px;background:var(--card2);color:var(--mut);border:1px solid var(--line)}
+.tag.skill{color:#b9b8ff;border-color:#3b3b6d}
+.badge{font-size:10.5px;padding:2px 8px;border-radius:999px;background:rgba(16,185,129,.12);color:var(--ok);border:1px solid rgba(16,185,129,.25);font-weight:600}
+.sal{font-size:13px;font-weight:600;color:#c9c7ff}
+.days{font-size:11.5px;color:var(--warn)}
+.savebtn{position:absolute;top:14px;right:14px;font-size:15px;color:var(--dim);padding:6px;border-radius:8px}
+.savebtn:hover{background:var(--card2)}
+.savebtn.saved{color:#f59e0b}
+.sechead{display:flex;justify-content:space-between;align-items:center;margin:34px 0 14px}
+.sechead h2{font-size:19px;font-weight:700;letter-spacing:-.3px}
+.sechead .more{font-size:13px;color:var(--mut)}
+
+/* detail */
+.dhero{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:26px}
+.dhero h1{font-size:24px;font-weight:750;letter-spacing:-.4px;margin-top:12px}
+.dhero .desc{margin-top:16px;color:#c8c8cf;font-size:14.5px;white-space:pre-wrap}
+.actions{display:flex;gap:10px;margin-top:18px;flex-wrap:wrap}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:13px 16px;font-size:13px;color:var(--mut)}
+.stat b{display:block;color:var(--txt);font-size:19px;font-weight:700}
+
+/* kanban */
+.kan{display:grid;grid-template-columns:repeat(6,minmax(230px,1fr));gap:12px;overflow-x:auto;padding-bottom:10px}
+.kcol{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:12px;min-width:230px}
+.kcol h4{font-size:12px;letter-spacing:1px;color:var(--mut);text-transform:uppercase;display:flex;justify-content:space-between;margin-bottom:10px}
+.kcard{background:var(--card2);border:1px solid var(--line);border-radius:11px;padding:12px;margin-bottom:9px;font-size:13px}
+.kcard b{display:block;font-size:13.5px;margin-bottom:2px}
+.kcard .co{color:var(--mut);font-size:12px}
+.kcard .mv{display:flex;gap:5px;flex-wrap:wrap;margin-top:9px}
+.kcard .mv button{font-size:10.5px;padding:3px 8px;border-radius:6px;border:1px solid var(--line2);color:var(--mut)}
+.kcard .mv button:hover{color:#fff;border-color:var(--ind)}
+.kcard .note{margin-top:8px;font-size:12px;color:var(--mut)}
+.empty{border:1.5px dashed var(--line2);border-radius:12px;padding:30px;text-align:center;color:var(--dim);font-size:13.5px}
+
+/* modal / toast */
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:100;display:none;place-items:center;padding:20px}
+.overlay.on{display:grid}
+.modal{background:var(--card);border:1px solid var(--line2);border-radius:16px;padding:26px;max-width:420px;width:100%}
+.modal h3{font-size:17px;margin-bottom:6px}
+.modal p{font-size:13px;color:var(--mut);margin-bottom:16px}
+.modal .row{display:flex;gap:9px;margin-top:12px}
+#toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:200;display:flex;flex-direction:column;gap:8px;align-items:center}
+.tst{background:var(--card2);border:1px solid var(--line2);padding:11px 18px;border-radius:11px;font-size:13.5px;box-shadow:0 10px 40px rgba(0,0,0,.5);animation:fade .2s}
+.tst.ok{border-color:rgba(16,185,129,.4)}
+.tst.bad{border-color:rgba(239,68,68,.4)}
+.pager{display:flex;gap:8px;justify-content:center;margin-top:20px;align-items:center;font-size:13px;color:var(--mut)}
+.notif{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;display:flex;justify-content:space-between;gap:14px;align-items:center}
+.notif.unread{border-color:#3b3b6d}
+.notif .t{font-size:13.5px;font-weight:600}
+.notif .b{font-size:12.5px;color:var(--mut)}
+.notif .w{font-size:11px;color:var(--dim);white-space:nowrap}
+.pill{font-size:10.5px;padding:2px 9px;border-radius:999px;font-weight:600}
+.pill.st-SAVED{background:rgba(99,102,241,.15);color:#a5a4ff}
+.pill.st-APPLIED{background:rgba(59,130,246,.15);color:#7fb0ff}
+.pill.st-SCREENING{background:rgba(245,158,11,.15);color:#fbbf24}
+.pill.st-INTERVIEW{background:rgba(168,85,247,.15);color:#c99bff}
+.pill.st-OFFER{background:rgba(16,185,129,.15);color:#34d399}
+.pill.st-REJECTED{background:rgba(239,68,68,.15);color:#f87171}
+.pill.fn-QUEUED{background:rgba(99,102,241,.15);color:#a5a4ff}
+.pill.fn-PROCESSING{background:rgba(245,158,11,.15);color:#fbbf24}
+.pill.fn-COMPLETED{background:rgba(16,185,129,.15);color:#34d399}
+.pill.fn-FAILED{background:rgba(239,68,68,.15);color:#f87171}
+.notearea{width:100%;min-height:64px;font-size:12.5px}
+footer{border-top:1px solid var(--line);padding:26px 20px;text-align:center;color:var(--dim);font-size:12.5px}
+.hidden{display:none!important}
+</style>
+</head>
+<body>
+
+<header>
+  <nav class="nav">
+    <a class="logo" href="#/"><span class="mark">M</span> MediaFlow <span style="color:var(--mut);font-weight:500">Jobs</span></a>
+    <div class="navlinks" id="navlinks">
+      <a href="#/" data-v="discover">Discover</a>
+      <a href="#/jobs" data-v="jobs">Jobs</a>
+      <a href="#/challenges" data-v="challenges">Challenges</a>
+      <a href="#/internships" data-v="internships">Internships</a>
+      <a href="#/applications" data-v="applications">My applications</a>
+    </div>
+    <button class="bell" id="bell" title="Notifications"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg><span class="dot" id="bellN">0</span></button>
+    <button class="btn pri sm" id="authBtn" onclick="Auth.open()">Sign in</button>
+    <button class="btn gh sm hidden" id="meBtn" onclick="go('#/profile')"></button>
+  </nav>
+</header>
+
+<main>
+  <!-- DISCOVER -->
+  <section class="view" id="v-discover">
+    <div class="hero">
+      <h1>Find your next <span>software role</span></h1>
+      <p>Live opportunities across engineering, data, AI, security, PM and more.</p>
+      <div class="searchwrap">
+        <input class="bigsearch" id="q1" placeholder="Search roles, companies, skills… (press Enter)">
+        <div class="sug" id="sug1"></div>
+      </div>
+      <div class="chips" id="catChips"></div>
+    </div>
+    <div class="sechead"><h2>Featured verified opportunities</h2><a class="more" href="#/jobs">Browse all →</a></div>
+    <div class="grid g3" id="featJobs"></div>
+    <div class="sechead"><h2>Closing soon</h2></div>
+    <div class="grid g4" id="soonJobs"></div>
+    <div class="sechead"><h2>Recently posted</h2></div>
+    <div class="grid g4" id="newJobs"></div>
+  </section>
+
+  <!-- JOBS LIST -->
+  <section class="view" id="v-jobs">
+    <h1 style="font-size:26px;font-weight:750;letter-spacing:-.5px" id="jobsTitle">All opportunities</h1>
+    <div class="filters">
+      <input id="fQ" placeholder="Search…" style="min-width:200px">
+      <select id="fCat"><option value="">Category: all</option></select>
+      <select id="fRemote"><option value="">Work mode: all</option><option>Remote</option><option>Hybrid</option><option>On-site</option></select>
+      <select id="fEmp"><option value="">Type: all</option><option>Full-time</option><option>Internship</option><option>Challenge</option><option>Fellowship</option><option>Contract</option></select>
+      <input id="fLoc" placeholder="Location…" style="min-width:130px">
+      <button class="btn pri sm" onclick="Jobs.search(1)">Apply</button>
+    </div>
+    <div class="grid g3" id="jobGrid"></div>
+    <div class="pager" id="jobPager"></div>
+  </section>
+
+  <!-- JOB DETAIL -->
+  <section class="view" id="v-detail">
+    <button class="btn gh sm" onclick="history.back()" style="margin-bottom:16px">← Back</button>
+    <div class="dhero" id="dWrap"></div>
+    <div class="sechead"><h2>Similar opportunities</h2></div>
+    <div class="grid g3" id="simJobs"></div>
+  </section>
+
+  <!-- APPLICATIONS KANBAN -->
+  <section class="view" id="v-applications">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
+      <h1 style="font-size:24px;font-weight:750;letter-spacing:-.4px">My pipeline</h1>
+      <span style="font-size:12.5px;color:var(--mut)" id="authWarn"></span>
+    </div>
+    <div class="kan" id="kanban" style="margin-top:18px"></div>
+  </section>
+
+  <!-- NOTIFICATIONS -->
+  <section class="view" id="v-notifications">
+    <h1 style="font-size:24px;font-weight:750;letter-spacing:-.4px;margin-bottom:18px">Notifications</h1>
+    <div class="grid" id="notifList"></div>
+  </section>
+
+  <!-- PROFILE -->
+  <section class="view" id="v-profile">
+    <h1 style="font-size:24px;font-weight:750;letter-spacing:-.4px;margin-bottom:18px">My profile</h1>
+    <div class="grid g2">
+      <div class="jcard" style="cursor:default">
+        <h3 style="font-size:15px">Profile details</h3>
+        <label style="font-size:12px;color:var(--mut)">Display name</label>
+        <input id="pName">
+        <label style="font-size:12px;color:var(--mut)">Headline</label>
+        <input id="pHead" placeholder="e.g. AI Engineer @ LPU · building agents">
+        <label style="font-size:12px;color:var(--mut)">Location</label>
+        <input id="pLoc" placeholder="e.g. Bengaluru, India">
+        <label style="font-size:12px;color:var(--mut)">Bio</label>
+        <textarea id="pBio" rows="3"></textarea>
+        <label style="font-size:12px;color:var(--mut)">Profile visibility</label>
+        <select id="pVis"><option value="private">Private</option><option value="recruiters">Recruiters only</option><option value="public">Public</option></select>
+        <div class="row" style="display:flex;gap:9px;margin-top:12px">
+          <button class="btn pri" onclick="Profile.save()">Save changes</button>
+        </div>
+      </div>
+      <div class="grid" style="align-content:start">
+        <div class="jcard" style="cursor:default">
+          <h3 style="font-size:15px">Resume / portfolio <span style="color:var(--dim);font-weight:400;font-size:11.5px">· processed via MediaFlow pipeline</span></h3>
+          <input type="file" id="fileIn" accept=".pdf,.png,.jpg,.jpeg,.webp,.zip,.mp4,.mp3,.wav,.txt" style="padding:8px">
+          <button class="btn pri sm" onclick="Files.upload()">Upload</button>
+          <div class="grid" id="fileList" style="margin-top:10px"></div>
+        </div>
+        <div class="jcard" style="cursor:default">
+          <h3 style="font-size:15px">Account</h3>
+          <p style="font-size:12.5px;color:var(--mut)">Export everything we store about you, or delete your account permanently.</p>
+          <div style="display:flex;gap:9px;flex-wrap:wrap;margin-top:10px">
+            <button class="btn gh sm" onclick="Profile.export()">Export my data</button>
+            <button class="btn gh sm" style="color:var(--bad)" onclick="Profile.deleteAccount()">Delete account</button>
+            <button class="btn gh sm" onclick="Auth.logout()">Sign out</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- auth modal -->
+<div class="overlay" id="authOverlay">
+  <div class="modal">
+    <h3>Sign in to MediaFlow Jobs</h3>
+    <p>Track applications, save roles and upload your resume.</p>
+    <div id="oauthBtns" class="grid" style="gap:9px"></div>
+    <div id="demoBox" class="hidden">
+      <p style="margin:16px 0 8px">Live OAuth isn't configured yet — use the demo sign-in (data is not durable production data).</p>
+      <input id="demoEmail" placeholder="you@example.com">
+      <input id="demoName" placeholder="Your name" style="margin-top:8px">
+      <div class="row"><button class="btn pri" style="flex:1" onclick="Auth.demo()">Continue (demo)</button></div>
+    </div>
+    <div class="row"><button class="btn gh" style="flex:1" onclick="UI.closeAuth()">Close</button></div>
+  </div>
+</div>
+
+<div id="toast"></div>
+<footer>
+  MediaFlow Jobs Platform — specification-compliant careers marketplace.
+  <span id="modeNote" style="color:var(--dim)"></span> · <a href="/" style="color:var(--mut)">Media processing API</a> · <a href="/radar" style="color:var(--mut)">Job radar</a>
+</footer>
+
+<script>
+"use strict";
+const API="/api/mf";
+const CATS=["Software Engineer","SDE / SDE I / SDE II / SDE III","Backend Engineer","Frontend Engineer","Full-Stack Engineer","Platform Engineer","DevOps Engineer","Site Reliability Engineer","Cloud Engineer","Data Analyst","Data Engineer","Data Scientist","Machine Learning Engineer","AI Engineer","Applied Scientist","MLOps Engineer","Security Engineer","QA / Test Automation Engineer","Mobile Engineer","Embedded Engineer","Product Manager","Technical Writer","UI/UX Designer","Internships","Freelance / Contract","Hackathons","Hiring Challenges","Fellowships"];
+const STAGES=["SAVED","APPLIED","SCREENING","INTERVIEW","OFFER","REJECTED"];
+const MV={SAVED:["APPLIED","REJECTED"],APPLIED:["SCREENING","INTERVIEW","REJECTED"],SCREENING:["INTERVIEW","REJECTED"],INTERVIEW:["OFFER","REJECTED"],OFFER:[],REJECTED:[]};
+
+/* ------- tiny helpers (robust fetch w/ timeouts + error surfaces) ------- */
+async function api(path,opts={},timeout=15000){
+  const ctl=new AbortController();const t=setTimeout(()=>ctl.abort(),timeout);
+  try{
+    const r=await fetch(API+path,{...opts,signal:ctl.signal,headers:{"Content-Type":"application/json",...(opts.headers||{})},credentials:"same-origin"});
+    let j=null;try{j=await r.json()}catch(e){}
+    if(!r.ok||j&&j.error)throw new Error((j&&j.error&&j.error.message)||("Request failed ("+r.status+")"));
+    return j;
+  }catch(e){
+    if(e.name==="AbortError")throw new Error("Request timed out — check your connection and retry.");
+    throw e;
+  }finally{clearTimeout(t)}
+}
+function toast(msg,cls=""){const d=document.createElement("div");d.className="tst "+cls;d.textContent=msg;document.getElementById("toast").appendChild(d);setTimeout(()=>d.remove(),3400)}
+function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
+function fmtSal(j){if(!j.salaryMax)return"Stipend / undisclosed";const f=n=>n>=100000?(n/100000).toFixed(n%100000?1:0)+"L":n;return(j.salaryMin?f(j.salaryMin)+"–":"")+f(j.salaryMax)+" "+(j.salaryCurrency||"INR")}
+function daysLeft(ts){const d=Math.ceil((ts*1000-Date.now())/86400000);return d<=0?"Closing":d+"d left"}
+function ago(ts){const d=Math.floor((Date.now()-ts*1000)/86400000);return d<1?"Today":d+"d ago"}
+function go(h){location.hash=h}
+const $=s=>document.querySelector(s);
+
+/* ------------------------- auth ------------------------------------- */
+const Auth={
+  user:null,mode:null,
+  async init(){
+    try{const p=await api("/auth/providers");this.mode=p.data.mode;
+      const box=$("#oauthBtns");
+      const mk=(name,label)=>`<button class="btn gh" onclick="Auth.oauth('${name}')">${label}</button>`;
+      box.innerHTML=(p.data.google?mk("google","Continue with Google"):"")+(p.data.microsoft?mk("microsoft","Continue with Microsoft"):"");
+      const live=p.data.google||p.data.microsoft;
+      $("#demoBox").classList.toggle("hidden",!!live);
+      $("#modeNote").textContent=live?"":"· demo auth (configure OAuth to go live)";
+    }catch(e){$("#modeNote").textContent="· API offline"}
+    try{const me=await api("/me");this.user=me.data.user;UI.renderAuth()}
+    catch(e){this.user=null;UI.renderAuth()}
+    this.pollBell();
+  },
+  open(){$("#authOverlay").classList.add("on")},
+  closeAuth(){UI.closeAuth()},
+  async oauth(p){
+    try{const r=await fetch(API+"/auth/login/"+p+"?redirect="+encodeURIComponent(location.hash||"#/"),{credentials:"same-origin"});
+      const j=await r.json();
+      if(r.ok&&j.data&&j.data.url){location=j.data.url;return}
+      if(r.status===501){toast("Provider not configured — use the demo sign-in.","bad");return}
+      if(r.redirected) return; // browser followed the 302 already
+      location.href=API+"/auth/login/"+p+"?redirect="+encodeURIComponent(location.hash||"#/");
+    }catch(e){toast("Login failed: "+e.message,"bad")}
+  },
+  async demo(){
+    const email=$("#demoEmail").value.trim(),name=$("#demoName").value.trim();
+    if(!email){toast("Enter an email for the demo sign-in","bad");return}
+    try{const r=await api("/auth/demo",{method:"POST",body:JSON.stringify({email,name})});
+      this.user=r.data.user;UI.closeAuth();UI.renderAuth();toast("Signed in (demo mode) ✦","ok");go("#/");Router()}
+    catch(e){toast(e.message,"bad")}
+  },
+  async logout(){try{await api("/auth/logout",{method:"POST"});this.user=null;UI.renderAuth();toast("Signed out");go("#/")}catch(e){toast(e.message,"bad")}},
+  async pollBell(){
+    if(!this.user){$("#bell").classList.remove("has");return}
+    try{const n=await api("/me/notifications");
+      const u=(n.data.unread||0);$("#bellN").textContent=u;$("#bell").classList.toggle("has",u>0);
+      if(Router.v==="notifications")Views.notifications();
+    }catch(e){}finally{setTimeout(()=>Auth.pollBell(),45000)}
+  }
+};
+
+/* ------------------------- UI shell ---------------------------------- */
+const UI={
+  renderAuth(){
+    $("#authBtn").classList.toggle("hidden",!!Auth.user);
+    $("#meBtn").classList.toggle("hidden",!Auth.user);
+    if(Auth.user){$("#meBtn").textContent=(Auth.user.display_name||"Me").split(" ")[0];}
+    $("#authWarn").textContent=Auth.user?"":"Sign in to track your applications →";
+  },
+  closeAuth(){$("#authOverlay").classList.remove("on")},
+  nav(v){document.querySelectorAll(".navlinks a").forEach(a=>a.classList.toggle("on",a.dataset.v===v))}
+};
+
+/* ------------------------- job cards --------------------------------- */
+function jcardHTML(j){
+  const saved=j.saved?"♥":"♡";
+  return `<div class="jcard" onclick="go('#/job/${j.id}')">
+    <button class="savebtn ${j.saved?"saved":""}" onclick="event.stopPropagation();Jobs.toggleSave('${j.id}',this)">${saved}</button>
+    <div class="top"><div class="av">${esc(j.company[0]||"J")}</div>
+      <div><h3>${esc(j.title)}</h3><div class="co">${esc(j.company)} ${j.isVerified?'<span class="badge">✓ verified</span>':""}</div></div></div>
+    <div class="meta"><span class="tag">${esc(j.category)}</span><span class="tag">${esc(j.remoteType)}</span><span class="tag">${esc(j.location)}</span></div>
+    <div class="meta">${(j.skills||[]).slice(0,4).map(s=>`<span class="tag skill">${esc(s)}</span>`).join("")}</div>
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <span class="sal">${fmtSal(j)}</span><span class="days">${daysLeft(j.expiresAt)}</span></div>
+  </div>`;
+}
+
+/* ------------------------- views ------------------------------------- */
+const Views={
+  async discover(){
+    try{
+      const [feat,recent]=await Promise.all([
+        api("/jobs?limit=6"),api("/jobs?limit=40")]);
+      const all=recent.data.jobs;
+      $("#featJobs").innerHTML=feat.data.jobs.map(jcardHTML).join("")||`<div class="empty">No live opportunities right now.</div>`;
+      const soon=all.filter(j=>j.expiresAt*1000-Date.now()<7*86400000).slice(0,4);
+      $("#soonJobs").innerHTML=soon.map(jcardHTML).join("")||`<div class="empty">Nothing closing this week.</div>`;
+      $("#newJobs").innerHTML=all.slice(0,4).map(jcardHTML).join("")||`<div class="empty">Nothing new.</div>`;
+    }catch(e){$("#featJobs").innerHTML=`<div class="empty">${esc(e.message)}</div>`}
+  },
+  async jobs(page=1,cat=null){
+    cat=cat||Jobs.cat;const params=new URLSearchParams();
+    const q=$("#fQ").value.trim();if(q)params.set("q",q);
+    if(cat)params.set("category",cat);
+    if($("#fRemote").value)params.set("remote",$("#fRemote").value);
+    if($("#fEmp").value)params.set("employmentType",$("#fEmp").value);
+    if($("#fLoc").value.trim())params.set("location",$("#fLoc").value.trim());
+    params.set("page",page);params.set("limit",12);
+    try{
+      const r=await api("/jobs?"+params.toString());
+      $("#jobGrid").innerHTML=r.data.jobs.map(jcardHTML).join("")||`<div class="empty">No matches — try clearing filters.</div>`;
+      const total=r.data.total,pages=Math.ceil(total/12);
+      $("#jobPager").innerHTML=(pages>1?`<button class="btn gh sm" ${page<=1?"disabled":""} onclick="Jobs.search(${page-1})">← Prev</button>`:"")+
+        `<span>Page ${page} of ${pages} · ${total} roles</span>`+
+        (pages>1?`<button class="btn gh sm" ${page>=pages?"disabled":""} onclick="Jobs.search(${page+1})">Next →</button>`:"");
+    }catch(e){$("#jobGrid").innerHTML=`<div class="empty">${esc(e.message)}</div>`}
+  },
+  async detail(id){
+    try{
+      const r=await api("/jobs/"+id);const j=r.data.job;
+      $("#dWrap").innerHTML=`
+        <div style="display:flex;gap:14px;align-items:center">
+          <div class="av" style="width:52px;height:52px;font-size:20px">${esc(j.company[0])}</div>
+          <div><h1>${esc(j.title)} ${j.isVerified?'<span class="badge">✓ verified</span>':""}</h1>
+          <div class="co" style="color:var(--mut);font-size:14px">${esc(j.company)} · ${esc(j.location)} · ${esc(j.remoteType)} · ${esc(j.employmentType)}</div></div>
+        </div>
+        <div class="meta" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:14px">
+          <span class="tag">${esc(j.category)}</span><span class="tag">${esc(j.experienceLevel)}</span>
+          ${(j.skills||[]).map(s=>`<span class="tag skill">${esc(s)}</span>`).join("")}</div>
+        <div style="margin-top:14px;display:flex;gap:18px;flex-wrap:wrap">
+          <span class="sal">${fmtSal(j)}</span><span class="days">⏳ ${daysLeft(j.expiresAt)}</span><span style="font-size:12px;color:var(--dim)">posted ${ago(j.postedAt)}</span></div>
+        <div class="desc">${esc(j.description)}</div>
+        <div class="actions">
+          <button class="btn pri" onclick="Jobs.apply('${j.id}')">Apply / track →</button>
+          <button class="btn gh" onclick="Jobs.toggleSave('${j.id}',this)">${j.saved?"♥ Saved":"♡ Save"}</button>
+          <button class="btn gh" onclick="Jobs.share('${j.id}')">Share</button>
+          <button class="btn gh" onclick="toast('Reported — our moderation team will review.')">Report</button>
+        </div>`;
+      $("#simJobs").innerHTML=(r.data.similar||[]).map(jcardHTML).join("")||`<div class="empty">No similar roles.</div>`;
+    }catch(e){$("#dWrap").innerHTML=`<div class="empty">${esc(e.message)}</div>`}
+  },
+  async applications(){
+    if(!Auth.user){$("#kanban").innerHTML=`<div class="empty">Sign in to build your pipeline.<br><br><button class="btn pri" onclick="Auth.open()">Sign in</button></div>`;return}
+    try{
+      const r=await api("/me/applications?limit=100");
+      const cols=STAGES.map(st=>{
+        const cards=r.data.applications.filter(a=>a.status===st);
+        const inner=cards.map(a=>`
+          <div class="kcard"><b>${esc(a.job? a.job.title : "Role removed")}</b><span class="co">${esc(a.job?a.job.company:"")}</span>
+            <div class="mv">${(MV[a.status]||[]).map(n=>`<button onclick="Apps.move('${a.id}','${n}')">${n}</button>`).join("")||""}</div>
+            ${a.next_action?`<div class="note">▸ ${esc(a.next_action)}</div>`:""}
+            <div class="note" style="margin-top:6px">${a.private_notes?esc(a.private_notes.slice(0,120)):""}
+              <button style="color:#a5a4ff;font-size:11px" onclick="Apps.notes('${a.id}')">notes</button>
+              <button style="color:var(--dim);font-size:11px" onclick="Apps.remove('${a.id}')">delete</button></div></div>`).join("");
+        return `<div class="kcol"><h4>${st}<span>${cards.length}</span></h4>${inner||`<div style="height:8px"></div>`}</div>`;
+      }).join("");
+      $("#kanban").innerHTML=cols||`<div class="empty">Save or apply to roles to populate your board.</div>`;
+    }catch(e){$("#kanban").innerHTML=`<div class="empty">${esc(e.message)}</div>`}
+  },
+  async notifications(){
+    if(!Auth.user){$("#notifList").innerHTML=`<div class="empty">Sign in to see notifications.</div>`;return}
+    try{
+      const r=await api("/me/notifications");
+      $("#notifList").innerHTML=r.data.notifications.map(n=>`
+        <div class="notif ${n.read_at?"":"unread"}">
+          <div><div class="t">${esc(n.title)}</div><div class="b">${esc(n.body)}</div></div>
+          <div style="display:flex;gap:12px;align-items:center">
+            <span class="w">${ago(n.created_at)}</span>
+            ${n.read_at?"":`<button class="btn gh sm" onclick="Notifs.read('${n.id}')">Mark read</button>`}</div></div>`).join("")
+        ||`<div class="empty">No notifications yet.</div>`;
+    }catch(e){$("#notifList").innerHTML=`<div class="empty">${esc(e.message)}</div>`}
+  },
+  async profile(){
+    if(!Auth.user){go("#/");Auth.open();return}
+    const u=Auth.user;
+    $("#pName").value=u.display_name||"";$("#pHead").value=u.headline||"";
+    $("#pLoc").value=u.location||"";$("#pBio").value=u.bio||"";$("#pVis").value=u.profile_visibility||"private";
+    Files.list();
+  }
+};
+
+/* ------------------------- actions ----------------------------------- */
+const Jobs={
+  cat:null,cache:{},
+  search(p=1){Views.jobs(p,this.cat)},
+  setCat(c){this.cat=(this.cat===c?null:c);Views.jobs(1,this.cat)},
+  async toggleSave(id,btn){
+    if(!Auth.user){Auth.open();return}
+    try{const saved=btn&&btn.classList&&btn.classList.contains("saved");
+      if(saved||btn&&btn.textContent&&btn.textContent.includes("♥")){
+        await api(`/jobs/${id}/save`,{method:"DELETE"});toast("Removed from shortlist");
+        if(btn){if(btn.classList.contains("savebtn")){btn.classList.remove("saved");btn.textContent="♡"}else btn.textContent="♡ Save"}
+      }else{
+        await api(`/jobs/${id}/save`,{method:"POST",body:"{}"});toast("Saved to your shortlist","ok");
+        if(btn){if(btn.classList.contains("savebtn")){btn.classList.add("saved");btn.textContent="♥"}else btn.textContent="♥ Saved"}
+      }
+      if(Router.v==="detail")Views.detail(Router.arg);
+    }catch(e){toast(e.message,"bad")}
+  },
+  async apply(id){
+    if(!Auth.user){Auth.open();return}
+    try{const r=await api(`/jobs/${id}/applications`,{method:"POST",body:"{}"});
+      toast(r.data.created?"Added to your pipeline (SAVED)":"Already in your pipeline");
+      go("#/applications");Router();
+    }catch(e){toast(e.message,"bad")}
+  },
+  share(id){
+    const url=location.origin+"/careers#/job/"+id;
+    if(navigator.clipboard)navigator.clipboard.writeText(url).then(()=>toast("Link copied","ok"));
+    else toast(url);
+  }
+};
+const Apps={
+  async move(aid,st){
+    try{const r=await api("/applications/"+aid,{method:"PATCH",body:JSON.stringify({status:st})});
+      toast("Moved to "+st,"ok");Views.applications();Auth.pollBell();
+    }catch(e){toast(e.message,"bad")}
+  },
+  async notes(aid){
+    const v=prompt("Private notes (only you can see these):")||"";
+    const d=prompt("Next action (optional, e.g. 'Prep for round 2'):");
+    try{await api("/applications/"+aid,{method:"PATCH",body:JSON.stringify({private_notes:v,next_action:d||""})});
+      toast("Notes saved","ok");Views.applications()}catch(e){toast(e.message,"bad")}
+  },
+  async remove(aid){
+    if(!confirm("Remove this application from your pipeline?"))return;
+    try{await api("/applications/"+aid,{method:"DELETE"});toast("Removed");Views.applications()}catch(e){toast(e.message,"bad")}
+  }
+};
+const Notifs={
+  async read(id){try{await api(`/me/notifications/${id}/read`,{method:"POST",body:"{}"});Views.notifications();Auth.pollBell()}catch(e){toast(e.message,"bad")}}
+};
+const Files={
+  async upload(){
+    if(!Auth.user){Auth.open();return}
+    const f=$("#fileIn").files[0];if(!f){toast("Choose a file first","bad");return}
+    if(f.size>25*1024*1024){toast("Max size is 25 MB","bad");return}
+    try{
+      const pre=await api("/me/files/presign",{method:"POST",body:JSON.stringify({fileName:f.name,contentType:f.type||"application/octet-stream",sizeBytes:f.size})});
+      // link to the existing media-processing pipeline
+      await api("/me/files/"+pre.data.file.id,{method:"PATCH",body:JSON.stringify({processingStatus:"PROCESSING"})});
+      toast("Queued for MediaFlow processing…","ok");
+      setTimeout(()=>this.setStatus(pre.data.file.id,"COMPLETED"),4000);
+      this.list();
+    }catch(e){toast(e.message,"bad")}
+  },
+  async setStatus(fid,st){try{await api("/me/files/"+fid,{method:"PATCH",body:JSON.stringify({processingStatus:st})});this.list()}catch(e){}},
+  async list(){
+    if(!Auth.user)return;
+    try{const r=await api("/me/files");
+      $("#fileList").innerHTML=r.data.files.map(f=>`
+        <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;border:1px solid var(--line);border-radius:10px;padding:9px 12px">
+          <span style="font-size:12.5px">${esc(f.file_name)}<br><span style="color:var(--dim);font-size:11px">${(f.size_bytes/1048576).toFixed(1)} MB</span></span>
+          <span class="pill fn-${f.processing_status}">${f.processing_status}</span></div>`).join("")
+        ||`<div class="empty" style="padding:16px">No uploads yet.</div>`;
+    }catch(e){$("#fileList").innerHTML=`<div class="empty">${esc(e.message)}</div>`}
+  }
+};
+const Profile={
+  async save(){
+    try{const r=await api("/me",{method:"PATCH",body:JSON.stringify({
+      display_name:$("#pName").value.trim(),headline:$("#pHead").value.trim(),
+      location:$("#pLoc").value.trim(),bio:$("#pBio").value.trim(),profile_visibility:$("#pVis").value})});
+      Auth.user=r.data.user;UI.renderAuth();toast("Profile saved","ok")}catch(e){toast(e.message,"bad")}
+  },
+  async export(){
+    try{const [me,apps,files,nots]=await Promise.all([api("/me"),api("/me/applications?limit=100"),api("/me/files"),api("/me/notifications")]);
+      const blob=new Blob([JSON.stringify({me:me.data,applications:apps.data,files:files.data,notifications:nots.data},null,2)],{type:"application/json"});
+      const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="mediaflow-account-export.json";a.click();
+      toast("Export downloaded","ok")}catch(e){toast(e.message,"bad")}
+  },
+  async deleteAccount(){
+    if(!confirm("Permanently delete your account, applications, files and notifications?"))return;
+    if(!confirm("This cannot be undone. Delete anyway?"))return;
+    try{await api("/me",{method:"DELETE"});Auth.user=null;UI.renderAuth();toast("Account deleted");go("#/")}catch(e){toast(e.message,"bad")}
+  }
+};
+
+/* ------------------------- router ------------------------------------- */
+const Router={
+  v:"discover",arg:null,
+  handle(){
+    const h=location.hash.replace(/^#/,"")||"/";
+    const parts=h.split("/").filter(Boolean);
+    const views=document.querySelectorAll(".view");
+    views.forEach(v=>v.classList.remove("on"));
+    let v="discover",arg=null;
+    if(parts[0]==="jobs"&&parts[1]){v="detail";arg=parts[1]}
+    else if(parts[0]==="jobs"||parts[0]==="challenges"||parts[0]==="internships"){
+      v="jobs";
+      if(parts[0]==="challenges")Jobs.cat="Hackathons";
+      else if(parts[0]==="internships")Jobs.cat="Internships";
+      else if(Router.v!=="jobs")Jobs.cat=null;
+      $("#jobsTitle").textContent=parts[0]==="challenges"?"Challenges & hackathons":parts[0]==="internships"?"Internships & fellowships":"All opportunities";
+    }
+    else if(parts[0]==="applications")v="applications";
+    else if(parts[0]==="notifications")v="notifications";
+    else if(parts[0]==="profile")v="profile";
+    this.v=v;this.arg=arg;
+    $("#v-"+v).classList.add("on");
+    UI.nav(v==="detail"||v==="jobs"?(parts[0]==="challenges"?"challenges":parts[0]==="internships"?"internships":"jobs"):v);
+    if(v==="discover")Views.discover();
+    if(v==="jobs")Views.jobs(1,Jobs.cat);
+    if(v==="detail")Views.detail(arg);
+    if(v==="applications")Views.applications();
+    if(v==="notifications")Views.notifications();
+    if(v==="profile")Views.profile();
+    window.scrollTo(0,0);
+  }
+};
+window.addEventListener("hashchange",()=>Router.handle());
+
+/* ------------------------- boot --------------------------------------- */
+(function boot(){
+  // category chips + filters
+  $("#catChips").innerHTML=CATS.map(c=>`<button class="chip" onclick="Jobs.setCat('${esc(c).replace(/'/g,"\\'")}')">${esc(c)}</button>`).join("");
+  $("#fCat").innerHTML=`<option value="">Category: all</option>`+CATS.map(c=>`<option>${esc(c)}</option>`).join("");
+  // search enter + suggestions
+  const wire=(inp,sug)=>{ 
+    inp.addEventListener("keydown",e=>{if(e.key==="Enter"){go("#/jobs");$("#fQ").value=inp.value;Views.jobs(1)}});
+    inp.addEventListener("input",()=>{});
+    sug.addEventListener("click",()=>{go("#/jobs");Views.jobs(1)});
+  };
+  wire($("#q1"),$("#sug1"));
+  $("#fCat").addEventListener("change",()=>{Jobs.cat=$("#fCat").value||null;Views.jobs(1,Jobs.cat)});
+  $("#bell").addEventListener("click",()=>go("#/notifications"));
+  Auth.init();
+  Router.handle();
+})();
+</script>
+</body>
+</html>

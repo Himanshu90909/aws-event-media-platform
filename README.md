@@ -2,6 +2,23 @@
 
 A production-style, asynchronous media-job API built with AWS SAM. The API accepts metadata quickly, creates a durable job record, stores a private S3 object reference, and publishes a message for background processing. The worker is retry-safe and reports partial batch failures so SQS can retry failed messages and eventually redrive them to a dead-letter queue.
 
+## MediaFlow Jobs Platform (careers marketplace)
+
+An authenticated, LinkedIn/Unstop-style software careers marketplace now runs beside
+the media pipeline at **[/careers](https://aws-event-media-platform.vercel.app/careers)**:
+
+- Google / Microsoft OAuth sign-in (demo sign-in until credentials are configured)
+- Live opportunity discovery across engineering, data, AI, security, PM,
+  internships, hackathons and fellowships — with search, filters and pagination
+- Personal shortlist + application Kanban pipeline
+  (Saved → Applied → Screening → Interview → Offer / Rejected)
+- Private notes, next actions, deduplicated notifications
+- Resume/portfolio uploads processed through the existing media pipeline
+- Account export and deletion
+
+Endpoints live under `/api/mf/*`; see [docs/jobs-platform.md](docs/jobs-platform.md)
+for the API surface, persistence adapters (Postgres / dev), and go-live checklist.
+
 ## Project links
 
 - [Architecture documentation](docs/architecture.md)
