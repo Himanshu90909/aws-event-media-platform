@@ -1061,11 +1061,22 @@ class PgStore(MemStore):
         self._seed_if_empty()
 
     def _q(self, sql, args=()):
+        import datetime as _dt
         with self.pg.cursor() as cur:
             cur.execute(sql, args)
             if cur.description:
                 cols = [d[0] for d in cur.description]
-                return [dict(zip(cols, r)) for r in cur.fetchall()]
+                rows = []
+                for r in cur.fetchall():
+                    row = {}
+                    for c, v in zip(cols, r):
+                        if isinstance(v, _dt.datetime):
+                            v = v.timestamp()          # epoch float, matches in-memory format
+                        elif isinstance(v, _dt.date):
+                            v = v.isoformat()
+                        row[c] = v
+                    rows.append(row)
+                return rows
             return []
 
     def _migrate(self):
