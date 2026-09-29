@@ -1057,27 +1057,51 @@ class PgStore(MemStore):
         self._migrate()
         self._seed_if_empty()
 
+    def _conn_err(self, exc):
+        """True when exc means the serverless PG connection went stale."""
+        import psycopg2
+        return isinstance(exc, (psycopg2.InterfaceError, psycopg2.OperationalError))
+
+    def _reconnect(self):
+        import psycopg2
+        try:
+            self.pg.close()
+        except Exception:
+            pass
+        self.pg = psycopg2.connect(DATABASE_URL)
+        self.pg.autocommit = True
+
     def _q(self, sql, args=()):
         import datetime as _dt
         from decimal import Decimal
-        with self.pg.cursor() as cur:
-            cur.execute(sql, args)
-            if cur.description:
-                cols = [d[0] for d in cur.description]
-                rows = []
-                for r in cur.fetchall():
-                    row = {}
-                    for c, v in zip(cols, r):
-                        if isinstance(v, _dt.datetime):
-                            v = v.timestamp()          # epoch float, matches in-memory format
-                        elif isinstance(v, _dt.date):
-                            v = v.isoformat()
-                        elif isinstance(v, Decimal):
-                            v = float(v)
-                        row[c] = v
-                    rows.append(row)
-                return rows
-            return []
+        # Serverless: the pooled connection can be closed by the proxy while
+        # the instance stays warm ("connection already closed"). Retry once
+        # on a stale-connection error after reconnecting.
+        for _attempt in range(2):
+            try:
+                with self.pg.cursor() as cur:
+                    cur.execute(sql, args)
+                    if cur.description:
+                        cols = [d[0] for d in cur.description]
+                        rows = []
+                        for r in cur.fetchall():
+                            row = {}
+                            for c, v in zip(cols, r):
+                                if isinstance(v, _dt.datetime):
+                                    v = v.timestamp()      # epoch float, matches in-memory format
+                                elif isinstance(v, _dt.date):
+                                    v = v.isoformat()
+                                elif isinstance(v, Decimal):
+                                    v = float(v)
+                                row[c] = v
+                            rows.append(row)
+                        return rows
+                    return []
+            except Exception as e:
+                if _attempt == 0 and self._conn_err(e):
+                    self._reconnect()
+                    continue
+                raise
 
     def _migrate(self):
         from db.schema import SCHEMA_SQL
