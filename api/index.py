@@ -512,6 +512,16 @@ MS_TENANT = os.environ.get("MICROSOFT_TENANT", "common")
 GOOGLE_REDIRECT = os.environ.get("GOOGLE_REDIRECT_URI", "/api/mf/auth/callback/google")
 MS_REDIRECT = os.environ.get("MICROSOFT_REDIRECT_URI", "/api/mf/auth/callback/microsoft")
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
+
+
+def _pg_ok() -> bool:
+    try:
+        import psycopg2  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
 STORAGE_MODE = "postgres" if (DATABASE_URL and _pg_ok()) else "ephemeral"
 
 SESSION_COOKIE = "mf_session"
@@ -535,15 +545,6 @@ MAX_FILE_BYTES = 25 * 1024 * 1024
 
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]{2,}$")
-
-
-def _pg_ok() -> bool:
-    try:
-        import psycopg2  # noqa: F401
-        return True
-    except Exception:
-        return False
-
 
 # ------------------------------------------------------------- live discovery
 # Free public sources merged at request time (no API keys). Cached per
