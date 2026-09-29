@@ -1,109 +1,28 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Event Media Platform — Live Pipeline</title>
-<link rel="stylesheet" href="/style.css">
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="MediaFlow — discover creative programs, submit media, and track processing in one workspace.">
+  <title>MediaFlow — Discover. Create. Go further.</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@700;800&display=swap" rel="stylesheet"><link rel="stylesheet" href="/style.css">
 </head>
 <body>
-<header>
-  <div class="brand">
-    <div class="logo">EM</div>
-    <div>
-      <h1>Event Media Platform</h1>
-      <p class="sub">Async media pipeline · live observability · open integration API · <a href="/radar">job radar →</a></p>
-    </div>
-  </div>
-  <div class="api-health" id="apiHealth"><span class="dot"></span> checking API…</div>
-</header>
-
-<section class="metrics">
-  <div class="tile"><p class="tl">JOBS</p><p class="tv" id="mTotal">0</p></div>
-  <div class="tile"><p class="tl">IN FLIGHT</p><p class="tv accent" id="mActive">0</p></div>
-  <div class="tile"><p class="tl">COMPLETED</p><p class="tv ok" id="mDone">0</p></div>
-  <div class="tile"><p class="tl">FAILED → DLQ</p><p class="tv bad" id="mFailed">0</p></div>
-  <div class="tile"><p class="tl">SUCCESS RATE</p><p class="tv ok" id="mRate">–</p></div>
-  <div class="tile"><p class="tl">AVG TIME</p><p class="tv" id="mAvg">–</p></div>
-</section>
-
-<section class="panel flow-panel">
-  <h2>Pipeline <span class="hint">what runs per job, left to right</span></h2>
-  <div class="flow" id="flow">
-    <div class="node" data-node="client">CLIENT</div>
-    <div class="link"></div>
-    <div class="node" data-node="ingest">API + INGEST λ</div>
-    <div class="link"></div>
-    <div class="node" data-node="store">S3 STORE</div>
-    <div class="link"></div>
-    <div class="node" data-node="queue">SQS <span class="depth" id="qDepth">0</span></div>
-    <div class="link"></div>
-    <div class="node worker" data-node="transcode">WORKERS <span class="depth" id="wBusy">0/4</span></div>
-    <div class="link"></div>
-    <div class="node" data-node="thumbnail">TRANSCODE · THUMB · META</div>
-    <div class="link"></div>
-    <div class="node final" data-node="publish">PUBLISHED ✓</div>
-    <div class="dots" id="dots"></div>
-  </div>
-  <div class="legend">
-    <span><i class="sw queued"></i>QUEUED (API layer)</span>
-    <span><i class="sw processing"></i>PROCESSING (worker fleet)</span>
-    <span><i class="sw bad"></i>retries → DLQ after 3 attempts</span>
-  </div>
-</section>
-
-<main>
-  <section class="panel create-panel">
-    <h2>Create job <span class="hint">POST /api/jobs</span></h2>
-    <form id="jobForm">
-      <label for="fileName">File name</label>
-      <input id="fileName" value="drone-4k-cut.mp4" required>
-      <label for="contentType">Content type</label>
-      <select id="contentType">
-        <option>video/mp4</option><option>video/webm</option><option>audio/mpeg</option>
-        <option>image/png</option><option>image/jpeg</option><option>application/pdf</option>
-      </select>
-      <label for="cbUrl">Callback URL <span class="check-hint">optional — signed webhook on completion</span></label>
-      <input id="cbUrl" placeholder="https://your-app.com/webhooks/em" spellcheck="false">
-      <label for="chaos">Chaos <span id="chaosVal" class="mono">0%</span> <span class="check-hint">— probability a job hits a failing worker</span></label>
-      <input type="range" id="chaos" min="0" max="100" value="0">
-      <button type="submit" class="btn">Submit job</button>
-    </form>
-    <div class="burst-row">
-      <label for="burstN">Spawn burst</label>
-      <select id="burstN"><option>3</option><option selected>5</option><option>10</option></select>
-      <button type="button" class="btn ghost" id="burstBtn">🚀 launch burst</button>
-    </div>
-    <div id="formError" class="error hidden"></div>
-  </section>
-
-  <section class="panel jobs-panel">
-    <h2>Jobs <span class="hint" id="jobCount">0</span></h2>
-    <div id="emptyState" class="empty">No jobs yet — submit one, or hit 🚀 launch burst and watch the fleet spin up.</div>
-    <div id="jobList"></div>
-  </section>
-</main>
-
-<section class="panel log-panel">
-  <h2>Live event log <span class="hint">streaming from the pipeline</span></h2>
-  <div class="term" id="term"></div>
-</section>
-
-<section class="panel docs">
-  <h2>Integrate <span class="hint">any app can POST directly — CORS open, webhooks signed</span></h2>
-  <div class="docs-grid">
-    <div><h3>cURL</h3><pre id="snipCurl"></pre></div>
-    <div><h3>JavaScript (fetch)</h3><pre id="snipJs"></pre></div>
-    <div><h3>Python (requests)</h3><pre id="snipPy"></pre></div>
-    <div><h3>Webhook your app receives</h3><pre id="snipHook"></pre></div>
-  </div>
-  <p class="sm-note">Webhooks are delivered at-least-once with an <code>X-EM-Signature: sha256=…</code> header — verify with <code>HMAC-SHA256(JOB_SIGNING_SECRET, raw_body)</code>. Flexible fields: <code>fileName</code>/<code>file</code>/<code>name</code>, contentType inferred from extension, JSON or form-encoded bodies both accepted.</p>
-</section>
-
-<footer>
-  <a href="https://github.com/Himanshu90909/aws-event-media-platform" target="_blank" rel="noopener">Himanshu90909/aws-event-media-platform</a> · AWS SAM backend in <code>src/</code> · Vercel port in <code>api/</code>
-</footer>
-
-<script src="/app.js"></script>
+  <div class="announcement"><span class="announcement-dot"></span> MediaFlow Labs is live — submit your next story to the pipeline <a href="#upload">Explore the workspace <span>↗</span></a></div>
+  <header class="site-header shell"><a class="wordmark" href="/" aria-label="MediaFlow home"><span class="wordmark-mark">M</span><span>media<span class="wordmark-accent">flow</span></span></a><nav class="main-nav" aria-label="Primary navigation"><a class="active" href="#discover">Discover</a><a href="#workspace">My workspace</a><a href="/radar">Opportunities <span class="new-pill">LIVE</span></a></nav><div class="header-actions"><button class="icon-btn" aria-label="Notifications">♧<span class="notification-dot"></span></button><button class="avatar" aria-label="Account menu">HM</button></div></header>
+  <main>
+    <section class="hero shell" id="discover"><div class="hero-copy"><p class="eyebrow"><span class="eyebrow-line"></span> YOUR CREATIVE OPERATING SYSTEM</p><h1>Where your next<br><em>big story</em> begins.</h1><p class="hero-sub">Discover media opportunities, submit your best work, and move from upload to published with a workflow built for momentum.</p><div class="hero-search"><span>⌕</span><input id="opportunitySearch" placeholder="Search jobs, challenges, creators..." aria-label="Search opportunities"><kbd>⌘ K</kbd></div><div class="hero-tags"><span>Trending:</span><button data-search="Film">Film</button><button data-search="Design">Design</button><button data-search="Creator economy">Creator economy</button><button data-search="AI video">AI video</button></div></div><div class="hero-art" aria-hidden="true"><div class="art-orbit orbit-one"></div><div class="art-orbit orbit-two"></div><div class="art-core"><span>MF</span><small>01</small></div><div class="art-card art-card-top"><span class="mini-icon pink">✦</span><div><b>New brief</b><small>Creator stories · 2h ago</small></div></div><div class="art-card art-card-bottom"><span class="mini-icon blue">↗</span><div><b>18,420 creators</b><small>building in public</small></div></div></div></section>
+    <section class="category-strip shell" aria-label="Explore categories"><div class="section-label">Explore by interest</div><div class="category-list"><button class="category active">✦ All programs</button><button class="category">◉ Competitions</button><button class="category">◌ Creator jobs</button><button class="category">◈ Courses</button><button class="category">△ Fellowships</button><button class="category">＋ More</button></div></section>
+    <section class="shell section-block"><div class="section-heading"><div><p class="eyebrow">CURATED FOR YOU</p><h2>Make something <em>matter.</em></h2></div><a class="view-all" href="/radar">View all opportunities <span>→</span></a></div><div class="opportunity-grid">
+      <article class="opportunity-card featured-card"><div class="card-visual visual-purple"><span class="visual-label">CHALLENGE · 2026</span><div class="visual-title">The future<br><em>is human.</em></div><span class="visual-orbit"></span><span class="visual-spark">✦</span></div><div class="card-body"><div class="card-meta"><span class="company-dot">N</span><span>Northstar Studios</span><span class="dot-sep">·</span><span>2 days left</span></div><h3>Reimagine the everyday</h3><p>Tell a 60-second story about the moments that make us human.</p><div class="card-footer"><span class="reward">₹2,50,000 <small>in rewards</small></span><button class="save-btn" aria-label="Save opportunity">♡</button></div></div></article>
+      <article class="opportunity-card"><div class="card-visual visual-lime"><span class="visual-label">OPEN ROLE</span><div class="visual-title">Create<br>with <em>intent.</em></div><div class="visual-grid"></div></div><div class="card-body"><div class="card-meta"><span class="company-dot dark">S</span><span>Studio One</span><span class="dot-sep">·</span><span>Remote</span></div><h3>Visual Storyteller</h3><p>Shape the visual language of a new generation platform.</p><div class="card-footer"><span class="reward">Full-time <small>· 3+ yrs</small></span><button class="save-btn" aria-label="Save opportunity">♡</button></div></div></article>
+      <article class="opportunity-card"><div class="card-visual visual-orange"><span class="visual-label">FELLOWSHIP</span><div class="visual-title">Make your<br><em>mark.</em></div><div class="visual-sun"></div></div><div class="card-body"><div class="card-meta"><span class="company-dot red">C</span><span>Culture Lab</span><span class="dot-sep">·</span><span>Online</span></div><h3>Emerging Creators Fellowship</h3><p>A six-week sprint for voices shaping culture.</p><div class="card-footer"><span class="reward">15 seats <small>· Apply free</small></span><button class="save-btn" aria-label="Save opportunity">♡</button></div></div></article>
+    </div></section>
+    <section class="workspace shell" id="workspace"><div class="workspace-intro"><p class="eyebrow">YOUR CREATOR DESK</p><h2>Ship work.<br><em>Stay in flow.</em></h2><p>One calm place to send your media through a reliable, observable pipeline. No lost files. No black boxes.</p><a href="#upload" class="text-link">Start a new submission <span>→</span></a><div class="trust-row"><span class="trust-icon">✓</span><span>Private by default</span><span class="trust-icon">⌁</span><span>Signed webhooks</span></div></div><div class="workspace-panel"><div class="workspace-panel-head"><div><span class="live-indicator"><i></i> LIVE PIPELINE</span><h3>Recent submissions</h3></div><div class="panel-actions"><span id="apiHealth"><i class="status-dot"></i> Connecting</span><button id="refreshJobs" class="quiet-btn">↻</button></div></div><div class="pipeline-summary"><div><strong id="mTotal">0</strong><span>All jobs</span></div><div><strong id="mActive">0</strong><span>In flight</span></div><div><strong id="mDone">0</strong><span>Published</span></div><div><strong id="mFailed">0</strong><span>Needs review</span></div></div><div id="emptyState" class="workspace-empty"><span class="empty-icon">✦</span><b>Your workspace is ready.</b><span>Submit a file below and watch it move.</span></div><div id="jobList" class="workspace-jobs"></div><div class="workspace-panel-foot"><span><span class="signal"></span> Processing infrastructure operational</span><a href="/radar">Browse opportunities →</a></div></div></section>
+    <section class="upload-section shell" id="upload"><div class="upload-copy"><p class="eyebrow">MAKE YOUR MOVE</p><h2>Send your next<br><em>best thing.</em></h2><p>Drop in a media reference and we’ll handle the rest. Your job is queued, processed asynchronously, and tracked end-to-end.</p><div class="upload-perks"><span>01 <b>Fast intake</b><small>202 accepted in milliseconds</small></span><span>02 <b>Deep visibility</b><small>Every stage, every retry</small></span><span>03 <b>Always recoverable</b><small>DLQ-backed reliability</small></span></div></div><form id="jobForm" class="upload-form"><div class="form-heading"><span class="form-step">NEW SUBMISSION</span><span class="secure-label">⌁ Secure workspace</span></div><label for="fileName">File name</label><div class="input-wrap"><span>▧</span><input id="fileName" value="my-next-story.mp4" required></div><div class="form-row"><div><label for="contentType">Format</label><select id="contentType"><option>video/mp4</option><option>video/webm</option><option>audio/mpeg</option><option>image/png</option><option>image/jpeg</option><option>application/pdf</option></select></div><div><label for="cbUrl">Callback <small>optional</small></label><input id="cbUrl" placeholder="https://your-app.com/hook" spellcheck="false"></div></div><label for="chaos">Simulation mode <span id="chaosVal">0%</span></label><input type="range" id="chaos" min="0" max="100" value="0"><div class="form-actions"><button type="submit" class="primary-btn">Submit to pipeline <span>→</span></button><button type="button" class="secondary-btn" id="burstBtn">Launch sample burst</button></div><div id="formError" class="form-error hidden"></div></form></section>
+    <section class="shell proof-strip"><div><span class="proof-number">18.4k</span><span>creators building<br>with MediaFlow</span></div><div><span class="proof-number">99.98%</span><span>pipeline<br>availability</span></div><div><span class="proof-number">7 stages</span><span>from intake<br>to published</span></div><div class="proof-quote">“The calmest way to get ambitious work out the door.” <small>— Ananya, independent filmmaker</small></div></section>
+  </main>
+  <footer class="site-footer shell"><a class="wordmark" href="/"><span class="wordmark-mark">M</span><span>media<span class="wordmark-accent">flow</span></span></a><span>Creative infrastructure for people making things.</span><div><a href="/radar">Opportunities</a><a href="https://github.com/Himanshu90909/aws-event-media-platform" target="_blank" rel="noopener">GitHub ↗</a></div></footer>
+  <script src="/app.js"></script>
 </body>
 </html>

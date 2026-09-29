@@ -358,6 +358,23 @@ def list_jobs() -> dict:
     return {"jobs": jobs, "count": len(jobs)}
 
 
+def overview() -> dict:
+    """Small operational read model for the workspace dashboard."""
+    data = list_jobs()
+    jobs = data["jobs"]
+    completed = sum(j["status"] == "COMPLETED" for j in jobs)
+    failed = sum(j["status"] == "FAILED" for j in jobs)
+    active = sum(j["status"] in ("QUEUED", "PROCESSING") for j in jobs)
+    return {
+        "service": "mediaflow-api",
+        "version": os.environ.get("APP_VERSION", "vercel-demo"),
+        "status": "operational",
+        "counts": {"total": len(jobs), "active": active, "completed": completed, "failed": failed},
+        "capabilities": ["async-processing", "signed-webhooks", "idempotent-status"],
+        "updatedAt": time.time(),
+    }
+
+
 
 # ---------------------------------------------------------------- job radar
 RADAR_CACHE = os.path.join("/tmp", "radar_cache.json")
@@ -439,6 +456,8 @@ def _send(h: BaseHTTPRequestHandler, status: int, body: dict) -> None:
     h.send_response(status)
     h.send_header("Content-Type", "application/json")
     h.send_header("Content-Length", str(len(data)))
+    h.send_header("X-API-Version", "2026-01")
+    h.send_header("X-Request-ID", str(uuid.uuid4()))
     h.send_header("Access-Control-Allow-Origin", "*")
     h.end_headers()
     h.wfile.write(data)
@@ -477,6 +496,12 @@ class handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         query = parse_qs(parsed.query)
         parts = [p for p in parsed.path.split("/") if p]
+        if parsed.path.rstrip("/") == "/health":
+            _send(self, 200, {"status": "ok", "service": "mediaflow-api", "version": os.environ.get("APP_VERSION", "vercel-demo")})
+            return
+        if parsed.path.rstrip("/") in ("/api/overview", "/overview"):
+            _send(self, 200, overview())
+            return
         job_id = ""
         if len(parts) >= 3 and parts[-2] == "jobs":
             job_id = unquote(parts[-1])
