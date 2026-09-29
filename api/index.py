@@ -571,101 +571,108 @@ def _mk_live(source, jtype, ext_id, title, company, location, remote_type, url,
             "live": True}
 
 
+def _fetch_remotive():
+    out = []
+    for cat in ("software-dev", "data"):
+        d = _http_json(f"https://remotive.com/api/remote-jobs?category={cat}&limit=60", 6)
+        for j in d.get("jobs", []):
+            out.append(_mk_live(
+                "remotive", "JOB", j.get("id"), j.get("title"), j.get("company_name"),
+                j.get("candidate_required_location") or "Remote", "Remote", j.get("url"),
+                (j.get("tags") or [])[:5], posted=_dt(j.get("publication_date")),
+                description=(j.get("description") or "")[:400]))
+    return out
+
+
+def _fetch_arbeitnow():
+    out = []
+    d = _http_json("https://www.arbeitnow.com/api/job-board-api", 6)
+    kw = ("developer", "engineer", "software", "data", "backend", "frontend",
+          "machine learning", "ai", "python", "java")
+    for j in d.get("data", []):
+        t = (j.get("title") or "").lower()
+        if not any(k in t for k in kw):
+            continue
+        out.append(_mk_live(
+            "arbeitnow", "JOB", j.get("slug"), j.get("title"), j.get("company_name"),
+            j.get("location"), "Remote" if j.get("remote") else "On-site", j.get("url"),
+            j.get("tags") or [], posted=(j.get("created_at") or 0) or None,
+            description=(j.get("description") or "")[:400]))
+    return out
+
+
+def _fetch_remoteok():
+    out = []
+    d = _http_json("https://remoteok.com/api", 6)
+    for j in d[1:]:
+        if not isinstance(j, dict) or not j.get("position"):
+            continue
+        out.append(_mk_live(
+            "remoteok", "JOB", j.get("id"), j.get("position"), j.get("company"),
+            j.get("location") or "Remote", "Remote", j.get("url"),
+            (j.get("tags") or [])[:5], posted=_dt(j.get("date"))))
+    return out
+
+
+def _fetch_mlh():
+    for season in ("2027", "2026"):
+        req = urllib.request.Request(
+            f"https://mlh.io/seasons/{season}/events",
+            headers={"User-Agent": "Mozilla/5.0"})
+        html = urllib.request.urlopen(req, timeout=9).read().decode("utf-8", "replace")
+        m = re.search(r'application/json">(.*?)</script>', html, re.S)
+        if not m:
+            continue
+        evs = json.loads(m.group(1)).get("props", {}).get("upcomingEvents", [])
+        out = []
+        for e in evs:
+            loc = e.get("location") or "Online"
+            rtype = "Remote" if (e.get("isVirtual") or e.get("formatType") == "virtual") else "On-site"
+            url = e.get("websiteUrl") or ("https://mlh.io" + (e.get("url") or f"/seasons/{season}/events"))
+            out.append(_mk_live(
+                "mlh", "HACKATHON", e.get("slug") or e.get("id"), e.get("name"),
+                "Major League Hacking", loc, rtype, url, ["hackathon", "students"],
+                posted=_dt(e.get("startsAt")), category="Hackathons",
+                description=(f"MLH {season} season hackathon — {e.get('name')} "
+                             f"({e.get('dateRange')}) at {loc}.")))
+        if out:  # 2027 season is the live one; stop after first success
+            return out
+    return []
+
+
 def _discover_live():
+    """Aggregate live opportunities. Fetches run in parallel under a hard
+    8s deadline so a slow source can never blow the serverless budget."""
     now = time.time()
     if now - _discover_cache["ts"] < _DISCOVER_TTL:
         return _discover_cache["items"], _discover_cache["sources"]
+    import concurrent.futures as cf
+    with cf.ThreadPoolExecutor(max_workers=4) as ex:
+        futs = {"remotive": ex.submit(_fetch_remotive),
+                "arbeitnow": ex.submit(_fetch_arbeitnow),
+                "remoteok": ex.submit(_fetch_remoteok),
+                "mlh": ex.submit(_fetch_mlh)}
+        done, _ = cf.wait(list(futs.values()), timeout=12)
     items, sources = [], {}
-    ok = lambda name: sources.update({name: True})
-    # Remotive — remote jobs (software-dev + data)
-    for cat, jtype in (("software-dev", "JOB"), ("data", "JOB")):
+    for name, f in futs.items():
+        if f not in done:
+            continue
         try:
-            d = _http_json(f"https://remotive.com/api/remote-jobs?category={cat}&limit=60", 8)
-            got = 0
-            for j in d.get("jobs", []):
-                items.append(_mk_live(
-                    "remotive", jtype, j.get("id"), j.get("title"), j.get("company_name"),
-                    j.get("candidate_required_location") or "Remote", "Remote", j.get("url"),
-                    (j.get("tags") or [])[:5], posted=_dt(j.get("publication_date")),
-                    description=(j.get("description") or "")[:400]))
-                got += 1
+            got = f.result()
             if got:
-                ok("remotive")
+                items += got
+                sources[name] = True
         except Exception:
             pass
-    # Arbeitnow — European job board (dev/data/AI roles only)
-    try:
-        d = _http_json("https://www.arbeitnow.com/api/job-board-api", 8)
-        got = 0
-        kw = ("developer", "engineer", "software", "data", "backend", "frontend",
-              "machine learning", "ai", "python", "java")
-        for j in d.get("data", []):
-            t = (j.get("title") or "").lower()
-            if not any(k in t for k in kw):
-                continue
-            items.append(_mk_live(
-                "arbeitnow", "JOB", j.get("slug"), j.get("title"), j.get("company_name"),
-                j.get("location"), "Remote" if j.get("remote") else "On-site", j.get("url"),
-                j.get("tags") or [], posted=(j.get("created_at") or 0) or None,
-                description=(j.get("description") or "")[:400]))
-            got += 1
-        if got:
-            ok("arbeitnow")
-    except Exception:
-        pass
-    # RemoteOK — remote dev jobs
-    try:
-        d = _http_json("https://remoteok.com/api", 8)
-        got = 0
-        for j in d[1:]:
-            if not isinstance(j, dict) or not j.get("position"):
-                continue
-            got += 1
-            items.append(_mk_live(
-                "remoteok", "JOB", j.get("id"), j.get("position"), j.get("company"),
-                j.get("location") or "Remote", "Remote", j.get("url"),
-                (j.get("tags") or [])[:5], posted=_dt(j.get("date"))))
-        if got:
-            ok("remoteok")
-    except Exception:
-        pass
-    # MLH — upcoming student hackathons (embedded JSON on season pages)
-    for season in ("2027", "2026"):
-        try:
-            req = urllib.request.Request(
-                f"https://mlh.io/seasons/{season}/events",
-                headers={"User-Agent": "Mozilla/5.0"})
-            html = urllib.request.urlopen(req, timeout=10).read().decode("utf-8", "replace")
-            m = re.search(r'application/json">(.*?)</script>', html, re.S)
-            if not m:
-                continue
-            evs = json.loads(m.group(1)).get("props", {}).get("upcomingEvents", [])
-            got = 0
-            for e in evs:
-                loc = e.get("location") or "Online"
-                rtype = "Remote" if e.get("isVirtual") or e.get("formatType") == "virtual" else "On-site"
-                url = e.get("websiteUrl") or ("https://mlh.io" + (e.get("url") or "/seasons/" + season + "/events"))
-                items.append(_mk_live(
-                    "mlh", "HACKATHON", e.get("slug") or e.get("id"), e.get("name"), "Major League Hacking",
-                    loc, rtype, url, ["hackathon", "students"],
-                    posted=_dt(e.get("startsAt")), category="Hackathons",
-                    description=(f"MLH {season} season hackathon — {e.get('name')} "
-                                 f"({e.get('dateRange')}) at {loc}.")))
-                got += 1
-            if got:
-                ok("mlh")
-                break  # 2027 season is the live one; stop after first success
-        except Exception:
-            pass
-    # de-dup by title+company
     seen, uniq = set(), []
     for it in items:
         k = (it["title"].lower(), it["company"].lower())
-        if k in seen:
-            continue
-        seen.add(k)
-        uniq.append(it)
-    _discover_cache.update({"ts": now, "items": uniq, "sources": sources})
+        if k not in seen:
+            seen.add(k)
+            uniq.append(it)
+    _discover_cache.update({
+        "ts": now if uniq else now - _DISCOVER_TTL + 300,  # retry sooner if all sources failed
+        "items": uniq, "sources": sources})
     return uniq, sources
 
 
