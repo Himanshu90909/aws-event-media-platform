@@ -1355,10 +1355,10 @@ def _provider_configured(provider: str) -> bool:
     return bool(MS_CID and MS_SEC)
 
 
-def _oauth_redirect(provider: str, state: str) -> str:
+def _oauth_redirect(provider: str, state: str, redirect_uri: str = "") -> str:
     if provider == "google":
         return ("https://accounts.google.com/o/oauth2/v2/auth?" + urlencode({
-            "client_id": GOOGLE_CID, "redirect_uri": GOOGLE_REDIRECT,
+            "client_id": GOOGLE_CID, "redirect_uri": redirect_uri or GOOGLE_REDIRECT,
             "response_type": "code", "scope": "openid email profile",
             "state": state, "nonce": state[:24]}))
     return (f"https://login.microsoftonline.com/{MS_TENANT}/oauth2/v2.0/authorize?" + urlencode({
@@ -1367,14 +1367,14 @@ def _oauth_redirect(provider: str, state: str) -> str:
         "state": state, "nonce": state[:24]}))
 
 
-def _exchange_code(provider: str, code: str):
+def _exchange_code(provider: str, code: str, redirect_uri: str = ""):
     """Server-side token exchange + identity verification. Access tokens are
     used once and never stored."""
     import urllib.request
     if provider == "google":
         token_url = "https://oauth2.googleapis.com/token"
         data = {"code": code, "client_id": GOOGLE_CID, "client_secret": GOOGLE_SEC,
-                "redirect_uri": GOOGLE_REDIRECT, "grant_type": "authorization_code"}
+                "redirect_uri": redirect_uri or GOOGLE_REDIRECT, "grant_type": "authorization_code"}
         userinfo_url = "https://openidconnect.googleapis.com/v1/userinfo"
     else:
         token_url = f"https://login.microsoftonline.com/{MS_TENANT}/oauth2/v2.0/token"
@@ -1568,7 +1568,7 @@ class MFHandler(handler):
                     return self._send(429, {"data": None, "error": {"code": "RATE_LIMITED",
                                                                     "message": "Too many login attempts"}})
                 state = oauth_state(q.get("redirect", ["/"])[0])
-                return self._redirect(_oauth_redirect(provider, state))
+                return self._redirect(_oauth_redirect(provider, state, self._abs_redirect()))
             if sub == "callback" and n == 3 and method == "GET":
                 provider = r[2]
                 st = verify_state(q.get("state", [""])[0])
@@ -1580,7 +1580,7 @@ class MFHandler(handler):
                     return self._send(400, envelope(None, error={
                         "code": "NO_CODE", "message": "Authorization code missing"}))
                 try:
-                    ident = _exchange_code(provider, code)
+                    ident = _exchange_code(provider, code, self._abs_redirect())
                 except Exception:
                     return self._send(502, envelope(None, error={
                         "code": "TOKEN_EXCHANGE_FAILED",
@@ -1854,6 +1854,17 @@ class MFHandler(handler):
 
         return self._send(404, envelope(None, error={
             "code": "NOT_FOUND", "message": f"Unknown route '{'/' + '/'.join(r)}'"}))
+
+    def _abs_redirect(self) -> str:
+        """Absolute OAuth redirect URI matching the one registered with the
+        provider (GOOGLE_REDIRECT may be a relative path by default)."""
+        if GOOGLE_REDIRECT.startswith("http"):
+            return GOOGLE_REDIRECT
+        proto = self.headers.get("x-forwarded-proto") or \
+            ("https" if APP_ORIGIN.startswith("https") else "http")
+        host = self.headers.get("host") or urlparse(APP_ORIGIN).netloc \
+            or "aws-event-media-platform.vercel.app"
+        return f"{proto}://{host}{GOOGLE_REDIRECT}"
 
     def _session_cookie(self, token):
         secure = " Secure;" if APP_ORIGIN.startswith("https") else ""
