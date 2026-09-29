@@ -1,4 +1,4 @@
-"""CI tests for the MediaFlow Jobs Platform (api/marketplace.py).
+"""CI tests for the MediaFlow Jobs Platform (merged into api/index.py).
 
 Covers the spec's definition-of-done core: application transitions,
 duplicate protection, ownership isolation, notifications dedup,
@@ -12,7 +12,8 @@ import uuid
 import pytest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SPEC = importlib.util.spec_from_file_location("marketplace", os.path.join(REPO, "api", "marketplace.py"))
+# the platform is merged into api/index.py (single-function Vercel runtime)
+SPEC = importlib.util.spec_from_file_location("app", os.path.join(REPO, "api", "index.py"))
 mp = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(mp)
 

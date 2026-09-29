@@ -20,8 +20,10 @@ callers). To preserve it, marketplace endpoints are mounted under **`/api/mf/*`*
 | `/api/applications/*` | `/api/mf/applications/*` |
 | `/api/health`, `/api/overview` | `/api/mf/health`, `/api/mf/overview` |
 
-`vercel.json` rewrites `/api/mf/(.*)` to the `api/marketplace.py` serverless function
-with the original path in `__route`. All other rewrites (media API, radar) unchanged.
+On the Vercel Python runtime every `/api/*` request reaches the single function
+`api/index.py`, so the marketplace handler (`MFHandler`) subclasses the media handler
+and routes by the `/api/mf/` path prefix inside one file. The media API, radar and
+webhook contract are untouched.
 
 ## Frontend
 

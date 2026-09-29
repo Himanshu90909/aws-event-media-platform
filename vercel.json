@@ -3,19 +3,12 @@
   "functions": {
     "api/index.py": {
       "maxDuration": 10
-    },
-    "api/marketplace.py": {
-      "maxDuration": 10
     }
   },
   "rewrites": [
     {
       "source": "/api/jobs/(.+)",
       "destination": "/api/jobs?jobId=$1"
-    },
-    {
-      "source": "/api/mf/(.*)",
-      "destination": "/api/marketplace?__route=/api/mf/$1"
     },
     {
       "source": "/radar",
