@@ -19,6 +19,25 @@ the media pipeline at **[/careers](https://aws-event-media-platform.vercel.app/c
 Endpoints live under `/api/mf/*`; see [docs/jobs-platform.md](docs/jobs-platform.md)
 for the API surface, persistence adapters (Postgres / dev), and go-live checklist.
 
+## Career intelligence upgrade
+
+MediaFlow Jobs is now an AI-powered career intelligence platform (see
+[docs/career-intelligence.md](docs/career-intelligence.md)):
+
+- **Resume AI** — consent-required, deterministic resume parsing with
+  user-correctable extraction (no black box, no fabrication)
+- **Explainable matching** — transparent 60/25/15 coverage scoring with
+  evidence, missing skills and uncertainty on every job
+- **Career roadmaps** — skill-gap reports per target role with real free
+  resources and tracked learning progress
+- **Pipeline** — SAVED → APPLIED → ASSESSMENT → SCREENING → INTERVIEW →
+  OFFER / REJECTED with notes and next actions
+- **Employer portal** — company registration (manual verification, no
+  auto-badges), job posting, applicant management, party-authorized messaging
+- **Trust layer** — human-reviewed listing reports, verification history,
+  fraud-caution flags, ingestion-run transparency
+- **Privacy** — full account export, resume deletion, consent log
+
 ## Project links
 
 - [Architecture documentation](docs/architecture.md)
