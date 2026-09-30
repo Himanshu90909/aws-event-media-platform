@@ -1,7 +1,6 @@
 """Career-intelligence tests: parser, explainable matcher, roadmap, consent,
 employer portal permissions, messaging authorization, reports, duplicates."""
 import importlib.util
-import json
 import os
 
 import pytest
@@ -218,7 +217,7 @@ def test_learning_progress(store, user):
 def test_assessment_transition_exists(store, user):
     jid = next(iter(store.jobs.values()))["id"]
     a, _ = store.create_application(user, jid)
-    a2, err = store.update_application(a["id"], {"status": "APPLIED"})
+    _a2, err = store.update_application(a["id"], {"status": "APPLIED"})
     assert err is None
     a3, err3 = store.update_application(a["id"], {"status": "ASSESSMENT"})
     assert err3 is None and a3["status"] == "ASSESSMENT"
