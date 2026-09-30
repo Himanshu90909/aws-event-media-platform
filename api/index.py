@@ -2357,6 +2357,52 @@ class MFHandler(handler):
             if n == 3 and r[2] == "verification" and method == "GET":
                 return self._send(200, envelope(
                     {"history": _store.verifications_of(r[1])}))
+            if n == 3 and r[2] == "prep" and method == "GET":
+                uid = self._require_auth()
+                if not uid:
+                    return
+                j = _store.get_job(r[1])
+                if not j:
+                    return self._send(404, envelope(None, error={
+                        "code": "NOT_FOUND", "message": "Job not found"}))
+                res = _store.latest_resume(uid)
+                parsed = (res or {}).get("parsed") or {}
+                u = _store.get_user(uid) or {}
+                m = _career.match_job(parsed, j)
+                _store.track("prep_open", uid, r[1])
+                return self._send(200, envelope({
+                    "prep": _career.prep_workspace(parsed, j, u),
+                    "match": m, "hasResume": bool(res)}))
+            if n == 3 and r[2] == "copilot" and method == "POST":
+                uid = self._require_auth()
+                if not uid:
+                    return
+                if not rate_ok(f"copilot:{uid}", 20):
+                    return self._send(429, envelope(None, error={
+                        "code": "RATE_LIMITED", "message": "Copilot limit reached, try later"}))
+                b = self._body() or {}
+                question = str(b.get("question") or "").strip()[:500]
+                if len(question) < 4:
+                    return self._send(400, envelope(None, error={
+                        "code": "BAD_QUESTION", "message": "Ask a question first"}))
+                j = _store.get_job(r[1])
+                if not j:
+                    return self._send(404, envelope(None, error={
+                        "code": "NOT_FOUND", "message": "Job not found"}))
+                res = _store.latest_resume(uid)
+                parsed = (res or {}).get("parsed") or {}
+                m = _career.match_job(parsed, j)
+                llm = _career.llm_copilot(question, j, parsed, m)
+                if llm:
+                    out = {"answer": llm, "engine": "llm", "intent": "freeform"}
+                else:
+                    out = _career.copilot_answer(question, j, parsed, m)
+                    out["engine"] = "rules"
+                out["disclaimer"] = ("AI-generated guidance based only on this listing and your "
+                                     "resume. Not an employer statement or a hiring prediction — "
+                                     "verify against the official source.")
+                _store.track("copilot_use", uid, r[1])
+                return self._send(200, envelope({"copilot": out}))
             return self._send(404, envelope(None, error={"code": "NOT_FOUND",
                                                           "message": "Unknown jobs route"}))
 
@@ -2764,56 +2810,6 @@ class MFHandler(handler):
                 return self._send(404, envelope(None, error={
                     "code": "NOT_FOUND", "message": "Application not found"}))
             return self._send(200, envelope({"application": a}))
-
-        # ---------------- per-job preparation workspace ------------------------
-        if head == "jobs" and n == 3 and r[2] == "prep" and method == "GET":
-            uid = self._require_auth()
-            if not uid:
-                return
-            j = _store.get_job(r[1])
-            if not j:
-                return self._send(404, envelope(None, error={
-                    "code": "NOT_FOUND", "message": "Job not found"}))
-            res = _store.latest_resume(uid)
-            parsed = (res or {}).get("parsed") or {}
-            u = _store.get_user(uid) or {}
-            m = _career.match_job(parsed, j)
-            _store.track("prep_open", uid, r[1])
-            return self._send(200, envelope({
-                "prep": _career.prep_workspace(parsed, j, u),
-                "match": m, "hasResume": bool(res)}))
-
-        # ---------------- career copilot ---------------------------------------
-        if head == "jobs" and n == 3 and r[2] == "copilot" and method == "POST":
-            uid = self._require_auth()
-            if not uid:
-                return
-            if not rate_ok(f"copilot:{uid}", 20):
-                return self._send(429, envelope(None, error={
-                    "code": "RATE_LIMITED", "message": "Copilot limit reached, try later"}))
-            b = self._body() or {}
-            question = str(b.get("question") or "").strip()[:500]
-            if len(question) < 4:
-                return self._send(400, envelope(None, error={
-                    "code": "BAD_QUESTION", "message": "Ask a question first"}))
-            j = _store.get_job(r[1])
-            if not j:
-                return self._send(404, envelope(None, error={
-                    "code": "NOT_FOUND", "message": "Job not found"}))
-            res = _store.latest_resume(uid)
-            parsed = (res or {}).get("parsed") or {}
-            m = _career.match_job(parsed, j)
-            llm = _career.llm_copilot(question, j, parsed, m)
-            if llm:
-                out = {"answer": llm, "engine": "llm", "intent": "freeform"}
-            else:
-                out = _career.copilot_answer(question, j, parsed, m)
-                out["engine"] = "rules"
-            out["disclaimer"] = ("AI-generated guidance based only on this listing and your "
-                                 "resume. Not an employer statement or a hiring prediction — "
-                                 "verify against the official source.")
-            _store.track("copilot_use", uid, r[1])
-            return self._send(200, envelope({"copilot": out}))
 
         # ---------------- admin: real usage analytics ---------------------------
         if head == "admin" and n == 2 and r[1] == "analytics" and method == "GET":
