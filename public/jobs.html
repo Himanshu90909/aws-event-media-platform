@@ -1331,7 +1331,7 @@ const Router={
     const views=document.querySelectorAll(".view");
     views.forEach(v=>v.classList.remove("on"));
     let v="discover",arg=null;
-    if(parts[0]==="jobs"&&parts[1]){v="detail";arg=parts[1]}
+    if((parts[0]==="jobs"||parts[0]==="job")&&parts[1]){v="detail";arg=parts[1]}
     else if(parts[0]==="jobs"||parts[0]==="challenges"||parts[0]==="internships"){
       v="jobs";
       if(parts[0]==="challenges")Jobs.cat="Hackathons";
