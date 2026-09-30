@@ -2388,7 +2388,7 @@ class MFHandler(handler):
                 return
             res = _store.latest_resume(uid)
             parsed = (res or {}).get("parsed") or {}
-            jobs, _t = _store.query_jobs(None, None, None, None, None, None, 1, 100)
+            jobs, _t = _store.query_jobs(None, None, None, None, None, None, None, 1, 100)
             scored = []
             for j in jobs:
                 m = _career.match_job(parsed, j)
