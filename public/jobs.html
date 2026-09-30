@@ -147,6 +147,23 @@ main{max-width:1180px;margin:0 auto;padding:26px 20px 90px}
 .notearea{width:100%;min-height:64px;font-size:12.5px}
 footer{border-top:1px solid var(--line);padding:26px 20px;text-align:center;color:var(--dim);font-size:12.5px}
 .hidden{display:none!important}
+/* career intelligence */
+.tile{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:16px}
+.tile h4{font-size:11.5px;color:var(--mut);font-weight:600;letter-spacing:.4px;text-transform:uppercase;margin-bottom:6px}
+.tile b{font-size:26px;font-weight:750}
+.tile p{font-size:12px;color:var(--mut);margin-top:4px}
+.bar{height:8px;background:var(--card2);border-radius:5px;overflow:hidden;margin:10px 0 4px}
+.bar i{display:block;height:100%;background:var(--grad)}
+.ev{list-style:none;display:grid;gap:6px;margin-top:8px}
+.ev li{font-size:12.5px;color:var(--mut);padding-left:14px;position:relative}
+.ev li:before{content:"·";position:absolute;left:2px;color:var(--ind);font-weight:900}
+.ok-chip{color:var(--ok)} .miss-chip{color:var(--bad);opacity:.85}
+.gapit{border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:var(--card)}
+.gapit h4{font-size:14px;margin-bottom:4px}
+.thr{max-height:260px;overflow:auto;display:grid;gap:8px;margin:10px 0}
+.msgline{border:1px solid var(--line);border-radius:10px;padding:8px 10px;font-size:12.5px}
+.msgline.mine{border-color:var(--ind);background:rgba(99,102,241,.08)}
+.stsel{font-size:11px;padding:3px 6px;border-radius:7px;background:var(--card2);border:1px solid var(--line)}
 </style>
 </head>
 <body>
@@ -161,6 +178,10 @@ footer{border-top:1px solid var(--line);padding:26px 20px;text-align:center;colo
       <a href="#/challenges" data-v="challenges">Challenges</a>
       <a href="#/internships" data-v="internships">Internships</a>
       <a href="#/applications" data-v="applications">My applications</a>
+      <a href="#/dash" data-v="dash">Dashboard</a>
+      <a href="#/resume" data-v="resume">Resume AI</a>
+      <a href="#/roadmap" data-v="roadmap">Roadmap</a>
+      <a href="#/employer" data-v="employer">For employers</a>
     </div>
     <button class="bell" id="bell" title="Notifications"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg><span class="dot" id="bellN">0</span></button>
     <button class="btn pri sm" id="authBtn" onclick="Auth.open()">Sign in</button>
@@ -221,6 +242,7 @@ footer{border-top:1px solid var(--line);padding:26px 20px;text-align:center;colo
   <section class="view" id="v-detail">
     <button class="btn gh sm" onclick="history.back()" style="margin-bottom:16px">← Back</button>
     <div class="dhero" id="dWrap"></div>
+    <div id="dMatch" style="margin-top:14px"></div>
     <div class="sechead"><h2>Similar opportunities</h2></div>
     <div class="grid g3" id="simJobs"></div>
   </section>
@@ -279,6 +301,57 @@ footer{border-top:1px solid var(--line);padding:26px 20px;text-align:center;colo
       </div>
     </div>
   </section>
+  <!-- DASHBOARD -->
+  <section class="view" id="v-dash">
+    <h1 style="font-size:24px;font-weight:750;letter-spacing:-.4px">Career dashboard</h1>
+    <p style="color:var(--mut);font-size:13px;margin-top:4px" id="dashHi"></p>
+    <div class="grid g4" id="dashTiles" style="margin-top:16px"></div>
+    <div class="sechead"><h2>Top AI matches</h2><span style="font-size:12px;color:var(--mut)">explainable · based on your resume profile</span></div>
+    <div id="dashMatch"></div>
+    <div class="sechead"><h2>Coming up</h2></div>
+    <div class="grid g2" id="dashDeadlines"></div>
+  </section>
+
+  <!-- RESUME AI -->
+  <section class="view" id="v-resume">
+    <h1 style="font-size:24px;font-weight:750;letter-spacing:-.4px">Resume AI</h1>
+    <p style="color:var(--mut);font-size:13px;margin-top:4px">Paste your resume text. We extract skills, education and projects mechanically — no black box — and you can correct anything before it is used for matching.</p>
+    <div class="grid g2" style="margin-top:16px">
+      <div class="jcard" style="cursor:default">
+        <h3 style="font-size:15px">Your resume</h3>
+        <textarea id="rsText" rows="10" placeholder="Paste resume text here (copy from your PDF)…"></textarea>
+        <label style="display:flex;gap:8px;align-items:flex-start;font-size:12.5px;color:var(--mut);margin-top:10px">
+          <input type="checkbox" id="rsConsent" style="width:auto;margin-top:3px">
+          <span>I consent to MediaFlow processing this resume text to extract my profile for job matching. I can delete it anytime from this page.</span></label>
+        <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+          <button class="btn pri" onclick="Resume.analyze()">Analyze resume</button>
+          <button class="btn gh" style="color:var(--bad)" onclick="Resume.remove()">Delete my resume</button>
+        </div>
+        <p id="rsMeta" style="font-size:11.5px;color:var(--dim);margin-top:8px"></p>
+      </div>
+      <div class="jcard" style="cursor:default">
+        <h3 style="font-size:15px">Extracted profile <span style="color:var(--dim);font-weight:400;font-size:11.5px">· editable — matching uses your corrections</span></h3>
+        <div id="rsParsed"><div class="empty">No resume analyzed yet.</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ROADMAP -->
+  <section class="view" id="v-roadmap">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+      <h1 style="font-size:24px;font-weight:750;letter-spacing:-.4px">Career roadmap</h1>
+      <select id="rmRole" style="max-width:280px" onchange="Roadmap.load()"></select>
+    </div>
+    <p style="color:var(--mut);font-size:13px;margin-top:6px">Skill-gap report and a learning plan with real, free resources. A roadmap is a study guide — not a promise of eligibility.</p>
+    <div id="rmWrap" style="margin-top:16px"></div>
+  </section>
+
+  <!-- EMPLOYER PORTAL -->
+  <section class="view" id="v-employer">
+    <h1 style="font-size:24px;font-weight:750;letter-spacing:-.4px">Employer portal</h1>
+    <p style="color:var(--mut);font-size:13px;margin-top:4px">Post opportunities and manage applicants. Verification is manual and honest: your company shows <b style="color:var(--warn)">pending verification</b> until a human reviews it.</p>
+    <div id="empWrap" style="margin-top:16px"></div>
+  </section>
 </main>
 
 <!-- auth modal -->
@@ -297,6 +370,35 @@ footer{border-top:1px solid var(--line);padding:26px 20px;text-align:center;colo
   </div>
 </div>
 
+<!-- report modal -->
+<div class="overlay" id="reportOverlay">
+  <div class="modal">
+    <h3>Report this listing</h3>
+    <p style="font-size:12.5px;color:var(--mut)">Reports are human-reviewed. Listings are never auto-removed by reports alone.</p>
+    <select id="rpReason" style="margin-top:10px">
+      <option value="inaccurate">Inaccurate information</option>
+      <option value="expired">Expired / already closed</option>
+      <option value="fraud">Potentially fraudulent</option>
+      <option value="duplicate">Duplicate of another listing</option>
+    </select>
+    <textarea id="rpDetails" rows="3" placeholder="What should we check?" style="margin-top:8px"></textarea>
+    <div class="row" style="margin-top:10px"><button class="btn pri" style="flex:1" onclick="Jobs.sendReport()">Send report</button><button class="btn gh" onclick="$('#reportOverlay').classList.remove('on')">Cancel</button></div>
+  </div>
+</div>
+
+<!-- message thread modal -->
+<div class="overlay" id="msgOverlay">
+  <div class="modal" style="max-width:560px">
+    <h3>Application thread</h3>
+    <div class="thr" id="msgThr"></div>
+    <div style="display:flex;gap:8px">
+      <input id="msgIn" placeholder="Write a message…">
+      <button class="btn pri sm" onclick="Msgs.send()">Send</button>
+    </div>
+    <div class="row" style="margin-top:8px"><button class="btn gh" style="flex:1" onclick="$('#msgOverlay').classList.remove('on')">Close</button></div>
+  </div>
+</div>
+
 <div id="toast"></div>
 <footer>
   MediaFlow Jobs Platform — specification-compliant careers marketplace.
@@ -307,8 +409,8 @@ footer{border-top:1px solid var(--line);padding:26px 20px;text-align:center;colo
 "use strict";
 const API="/api/mf";
 const CATS=["Software Engineer","SDE / SDE I / SDE II / SDE III","Backend Engineer","Frontend Engineer","Full-Stack Engineer","Platform Engineer","DevOps Engineer","Site Reliability Engineer","Cloud Engineer","Data Analyst","Data Engineer","Data Scientist","Machine Learning Engineer","AI Engineer","Applied Scientist","MLOps Engineer","Security Engineer","QA / Test Automation Engineer","Mobile Engineer","Embedded Engineer","Product Manager","Technical Writer","UI/UX Designer","Internships","Freelance / Contract","Hackathons","Hiring Challenges","Fellowships"];
-const STAGES=["SAVED","APPLIED","SCREENING","INTERVIEW","OFFER","REJECTED"];
-const MV={SAVED:["APPLIED","REJECTED"],APPLIED:["SCREENING","INTERVIEW","REJECTED"],SCREENING:["INTERVIEW","REJECTED"],INTERVIEW:["OFFER","REJECTED"],OFFER:[],REJECTED:[]};
+const STAGES=["SAVED","APPLIED","ASSESSMENT","SCREENING","INTERVIEW","OFFER","REJECTED"];
+const MV={SAVED:["APPLIED","REJECTED"],APPLIED:["ASSESSMENT","SCREENING","INTERVIEW","REJECTED"],ASSESSMENT:["INTERVIEW","REJECTED"],SCREENING:["INTERVIEW","REJECTED"],INTERVIEW:["OFFER","REJECTED"],OFFER:[],REJECTED:[]};
 
 /* ------- tiny helpers (robust fetch w/ timeouts + error surfaces) ------- */
 async function api(path,opts={},timeout=15000){
@@ -498,9 +600,16 @@ const Views={
           <button class="btn pri" onclick="Jobs.apply('${j.id}')">Apply / track →</button>
           <button class="btn gh" onclick="Jobs.toggleSave('${j.id}',this)">${j.saved?"♥ Saved":"♡ Save"}</button>
           <button class="btn gh" onclick="Jobs.share('${j.id}')">Share</button>
-          <button class="btn gh" onclick="toast('Reported — our moderation team will review.')">Report</button>
+          <button class="btn gh" onclick="Jobs.report('${j.id}')">Report listing</button>
         </div>`;
       $("#simJobs").innerHTML=(r.data.similar||[]).map(jcardHTML).join("")||`<div class="empty">No similar roles.</div>`;
+      Jobs.loadMatch(id);
+      if((r.data.cautions||[]).length){
+        $("#dWrap").insertAdjacentHTML("beforeend",
+          `<div class="jcard" style="cursor:default;margin-top:14px;border-color:var(--warn)">
+           <h3 style="font-size:14px;color:var(--warn)">⚠ Review before applying</h3>
+           <p style="font-size:12.5px;color:var(--mut)">This listing contains patterns our caution checker flagged: ${r.data.cautions.join(", ")}. We never auto-label listings fraudulent — verify on the official source before sharing personal information.</p></div>`);
+      }
     }catch(e){$("#dWrap").innerHTML=`<div class="empty">${esc(e.message)}</div>`}
   },
   async applications(){
@@ -515,6 +624,7 @@ const Views={
             ${a.next_action?`<div class="note">▸ ${esc(a.next_action)}</div>`:""}
             <div class="note" style="margin-top:6px">${a.private_notes?esc(a.private_notes.slice(0,120)):""}
               <button style="color:#a5a4ff;font-size:11px" onclick="Apps.notes('${a.id}')">notes</button>
+              <button style="color:#a5a4ff;font-size:11px" onclick="Apps.thread('${a.id}')">chat</button>
               <button style="color:var(--dim);font-size:11px" onclick="Apps.remove('${a.id}')">delete</button></div></div>`).join("");
         return `<div class="kcol"><h4>${st}<span>${cards.length}</span></h4>${inner||`<div style="height:8px"></div>`}</div>`;
       }).join("");
@@ -533,6 +643,63 @@ const Views={
             ${n.read_at?"":`<button class="btn gh sm" onclick="Notifs.read('${n.id}')">Mark read</button>`}</div></div>`).join("")
         ||`<div class="empty">No notifications yet.</div>`;
     }catch(e){$("#notifList").innerHTML=`<div class="empty">${esc(e.message)}</div>`}
+  },
+  async dash(){
+    if(!Auth.user){$("#dashHi").textContent="Sign in to see your personalized dashboard.";
+      $("#dashTiles").innerHTML="";$("#dashMatch").innerHTML=`<div class="empty">Sign in for AI matches based on your resume.</div>`;
+      $("#dashDeadlines").innerHTML="";return}
+    $("#dashHi").textContent="Everything about your search, in one place — honest numbers only.";
+    try{
+      const [me,apps,res]=await Promise.all([api("/me"),api("/me/applications?limit=100"),api("/resume")]);
+      const list=apps.data.applications||[];
+      const applied=list.filter(a=>a.status!=="SAVED"&&a.status!=="REJECTED").length;
+      const saved=me.data.savedCount||0;
+      const hasResume=!!res.data.resume;
+      $("#dashTiles").innerHTML=`
+        <div class="tile"><h4>Pipeline</h4><b>${list.length}</b><p>roles tracked</p></div>
+        <div class="tile"><h4>Active applications</h4><b>${applied}</b><p>beyond SAVED</p></div>
+        <div class="tile"><h4>Shortlisted</h4><b>${saved}</b><p>saved roles</p></div>
+        <div class="tile"><h4>Resume profile</h4><b>${hasResume?"✓":"—"}</b><p>${hasResume?(res.data.resume.parsed.skills||[]).length+" skills extracted":"upload in Resume AI"}</p></div>`;
+      const m=await api("/match/recommended");
+      $("#dashMatch").innerHTML=(m.data.recommended||[]).map(r=>`
+        <div class="jcard" style="cursor:default;margin-bottom:10px">
+          <div class="top"><div class="av">${esc(r.job.company[0]||"J")}</div>
+          <div><h3><a href="#/job/${r.job.id}" style="color:var(--txt)">${esc(r.job.title)}</a></h3>
+          <div class="co">${esc(r.job.company)} · score ${Math.round(r.match.score*100)}%</div></div></div>
+          <div class="chips2" style="margin-top:8px">
+            ${(r.match.required.matched||[]).map(s=>`<span class="tag skill ok-chip">✓ ${esc(s)}</span>`).join("")}
+            ${(r.match.required.missing||[]).slice(0,4).map(s=>`<span class="tag skill miss-chip">△ ${esc(s)}</span>`).join("")}
+          </div>
+          ${hasResume?"":`<p style="font-size:11.5px;color:var(--dim);margin-top:8px">Scores are job-requirements summaries until you add a resume.</p>`}
+        </div>`).join("")||`<div class="empty">No live opportunities right now.</div>`;
+      const soon=list.filter(a=>a.next_action_at).sort((a,b)=>a.next_action_at-b.next_action_at).slice(0,6);
+      $("#dashDeadlines").innerHTML=soon.map(a=>`
+        <div class="jcard" style="cursor:default"><h3 style="font-size:14px">${esc(a.job?a.job.title:"Role removed")}</h3>
+        <p style="font-size:12.5px;color:var(--mut)">${esc(a.next_action||"Next step")} · ${new Date(a.next_action_at*1000).toLocaleDateString()}</p></div>`).join("")
+        ||`<div class="empty">No next-actions scheduled. Add follow-up reminders on your pipeline cards.</div>`;
+    }catch(e){$("#dashTiles").innerHTML=`<div class="empty">${esc(e.message)}</div>`}
+  },
+  async resume(){
+    if(!Auth.user){Auth.open();return}
+    try{const r=await api("/resume");
+      const res=r.data.resume;
+      $("#rsMeta").textContent=res?`Last analyzed ${new Date(res.created_at*1000).toLocaleString()} · consent recorded`:"No resume on file yet.";
+      if(!res){$("#rsParsed").innerHTML=`<div class="empty">Analyze your first resume to unlock AI matching and roadmaps.</div>`;return}
+      renderParsed(res.parsed);
+    }catch(e){$("#rsParsed").innerHTML=`<div class="empty">${esc(e.message)}</div>`}
+  },
+  async roadmap(role){
+    if(!Auth.user){Auth.open();return}
+    try{
+      const r=await api("/roadmap");
+      const roles=r.data.roles||[];
+      $("#rmRole").innerHTML=`<option value="">Choose a target role…</option>`+roles.map(x=>`<option ${x===role?"selected":""}>${esc(x)}</option>`).join("");
+      if(role)Roadmap.load();else $("#rmWrap").innerHTML=`<div class="empty">Pick a role to generate your skill-gap report and learning plan.</div>`;
+    }catch(e){$("#rmWrap").innerHTML=`<div class="empty">${esc(e.message)}</div>`}
+  },
+  async employer(){
+    if(!Auth.user){Auth.open();return}
+    Emp.render();
   },
   async profile(){
     if(!Auth.user){go("#/");Auth.open();return}
@@ -628,8 +795,8 @@ const Profile={
       Auth.user=r.data.user;UI.renderAuth();toast("Profile saved","ok")}catch(e){toast(e.message,"bad")}
   },
   async export(){
-    try{const [me,apps,files,nots]=await Promise.all([api("/me"),api("/me/applications?limit=100"),api("/me/files"),api("/me/notifications")]);
-      const blob=new Blob([JSON.stringify({me:me.data,applications:apps.data,files:files.data,notifications:nots.data},null,2)],{type:"application/json"});
+    try{const ex=await api("/privacy/export");
+      const blob=new Blob([JSON.stringify(ex.data.export,null,2)],{type:"application/json"});
       const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="mediaflow-account-export.json";a.click();
       toast("Export downloaded","ok")}catch(e){toast(e.message,"bad")}
   },
@@ -638,6 +805,226 @@ const Profile={
     if(!confirm("This cannot be undone. Delete anyway?"))return;
     try{await api("/me",{method:"DELETE"});Auth.user=null;UI.renderAuth();toast("Account deleted");go("#/")}catch(e){toast(e.message,"bad")}
   }
+};
+
+/* ------------------------- resume AI ---------------------------------- */
+function renderParsed(p){
+  if(!p){$("#rsParsed").innerHTML=`<div class="empty">Nothing parsed yet.</div>`;return}
+  $("#rsParsed").innerHTML=`
+    <label style="font-size:12px;color:var(--mut)">Skills (edit freely — used for matching)</label>
+    <input id="rpSkills" value="${esc((p.skills||[]).join(", "))}" placeholder="Python, React, SQL…">
+    <div class="grid g3" style="margin-top:10px">
+      <div><label style="font-size:12px;color:var(--mut)">Highest degree</label><input id="rpEdu" value="${esc(p.education||"")}"></div>
+      <div><label style="font-size:12px;color:var(--mut)">Graduation year</label><input id="rpGrad" value="${p.graduation_year||""}"></div>
+      <div><label style="font-size:12px;color:var(--mut)">Experience (years)</label><input id="rpExp" value="${p.experience_years||0}"></div>
+    </div>
+    <label style="font-size:12px;color:var(--mut);margin-top:10px;display:block">Projects</label>
+    ${(p.projects||[]).slice(0,6).map(x=>`<p style="font-size:12.5px;color:var(--mut)">· ${esc(x)}</p>`).join("")||'<p style="font-size:12px;color:var(--dim)">No projects section detected.</p>'}
+    <p style="font-size:11.5px;color:var(--dim);margin-top:10px">${esc(p.extraction_note||"")}</p>
+    <button class="btn pri sm" style="margin-top:10px" onclick="Resume.save()">Save corrections</button>`;
+}
+const Resume={
+  async analyze(){
+    if(!Auth.user){Auth.open();return}
+    const text=$("#rsText").value.trim();
+    if(!text){toast("Paste your resume text first","bad");return}
+    if(!$("#rsConsent").checked){toast("Explicit consent is required to process your resume","bad");return}
+    try{
+      const r=await api("/resume",{method:"POST",body:JSON.stringify({text,consent:true,file_name:"resume.txt"})});
+      toast("Resume analyzed — review the extraction","ok");
+      $("#rsMeta").textContent="Analyzed just now · consent recorded";
+      renderParsed(r.data.resume.parsed);
+    }catch(e){toast(e.message,"bad")}
+  },
+  async save(){
+    const skills=$("#rpSkills").value.split(",").map(s=>s.trim()).filter(Boolean);
+    const patch={skills,education:$("#rpEdu").value.trim()||null,
+      graduation_year:parseInt($("#rpGrad").value)||null,
+      experience_years:parseFloat($("#rpExp").value)||0};
+    try{const r=await api("/resume",{method:"PATCH",body:JSON.stringify({parsed:patch})});
+      toast("Corrections saved — matching now uses them","ok");
+      renderParsed(r.data.resume.parsed)}catch(e){toast(e.message,"bad")}
+  },
+  async remove(){
+    if(!Auth.user)return;
+    if(!confirm("Delete your resume and stop resume processing?"))return;
+    try{await api("/resume",{method:"DELETE"});toast("Resume deleted, consent withdrawn","ok");
+      $("#rsParsed").innerHTML=`<div class="empty">No resume on file yet.</div>`;
+      $("#rsMeta").textContent="No resume on file yet."}catch(e){toast(e.message,"bad")}
+  }
+};
+
+/* ------------------------- roadmap ------------------------------------ */
+const Roadmap={
+  async load(){
+    const role=$("#rmRole").value;
+    if(!role){$("#rmWrap").innerHTML=`<div class="empty">Pick a role first.</div>`;return}
+    try{
+      const r=await api("/roadmap?role="+encodeURIComponent(role));
+      const rd=r.data.roadmap;
+      $("#rmWrap").innerHTML=`
+        <div class="jcard" style="cursor:default">
+          <h3 style="font-size:15px">${esc(rd.role)} — ${Math.round(rd.coverage*100)}% skill coverage</h3>
+          <div class="bar"><i style="width:${Math.round(rd.coverage*100)}%"></i></div>
+          <div class="chips2" style="margin-top:8px">${rd.skills_have.map(s=>`<span class="tag skill ok-chip">✓ ${esc(s)}</span>`).join("")||'<span style="font-size:12px;color:var(--dim)">No target skills in your profile yet.</span>'}</div>
+          <p style="font-size:11.5px;color:var(--dim);margin-top:10px">${esc(rd.note)}</p>
+        </div>
+        <div class="sechead"><h2>Learning plan (${rd.skills_gap.length} skill gaps)</h2></div>
+        <div class="grid g2">${rd.skills_gap.map(g=>`
+          <div class="gapit">
+            <h4>${esc(g.skill)}
+              <select class="stsel" style="float:right" onchange="Roadmap.setStatus('${esc(g.skill).replace(/'/g,"")}','${esc(role).replace(/'/g,"")}',this.value)">
+                <option value="todo" ${g.status==="todo"?"selected":""}>to do</option>
+                <option value="in_progress" ${g.status==="in_progress"?"selected":""}>learning</option>
+                <option value="done" ${g.status==="done"?"selected":""}>done</option>
+              </select></h4>
+            <p style="font-size:12px;color:var(--mut)">${esc(g.suggested_project)}</p>
+            ${(g.resources||[]).map(r2=>`<a href="${r2.url}" target="_blank" rel="noopener" style="display:block;font-size:12.5px;color:#a5a4ff;margin-top:6px">→ ${esc(r2.title)}</a>`).join("")}
+          </div>`).join("")||'<div class="empty">No gaps — you cover the core skills for this role. Read live postings for real requirements.</div>'}
+        </div>
+        <div class="sechead"><h2>Interview prep</h2></div>
+        <ul class="ev">${rd.interview_prep.map(x=>`<li>${esc(x)}</li>`).join("")}</ul>`;
+    }catch(e){$("#rmWrap").innerHTML=`<div class="empty">${esc(e.message)}</div>`}
+  },
+  async setStatus(skill,role,status){
+    try{await api("/roadmap/progress",{method:"POST",body:JSON.stringify({skill,role,status})});
+      toast("Progress: "+status,"ok")}catch(e){toast(e.message,"bad")}
+  }
+};
+
+/* ------------------------- employer portal ----------------------------- */
+const Emp={
+  async render(){
+    try{const r=await api("/employers");
+      const e=r.data.employer;
+      if(!e){$("#empWrap").innerHTML=`
+        <div class="jcard" style="cursor:default;max-width:520px">
+          <h3 style="font-size:15px">Register your company</h3>
+          <label style="font-size:12px;color:var(--mut)">Company name</label><input id="eName" placeholder="e.g. Acme Labs">
+          <label style="font-size:12px;color:var(--mut)">Website</label><input id="eSite" placeholder="https://…">
+          <label style="font-size:12px;color:var(--mut)">About</label><textarea id="eAbout" rows="3" placeholder="What does your company build?"></textarea>
+          <button class="btn pri sm" style="margin-top:10px" onclick="Emp.register()">Register</button>
+          <p style="font-size:11.5px;color:var(--dim);margin-top:8px">One account = one company. Verification is manual and badge-free until approved.</p>
+        </div>`;return}
+      const vs=e.verification_status==="verified"?'<span class="badge">✓ verified</span>':`<span class="tag" style="color:var(--warn)">⏳ ${esc(e.verification_status)} verification</span>`;
+      const jobs=await api("/employers/jobs");
+      const applicants=await api("/employers/applicants?limit=50");
+      $("#empWrap").innerHTML=`
+        <div class="jcard" style="cursor:default"><h3 style="font-size:15px">${esc(e.company_name)} ${vs}</h3>
+          <p style="font-size:12.5px;color:var(--mut)">${esc(e.about||"")}</p></div>
+        <div class="grid g2" style="margin-top:14px">
+          <div class="jcard" style="cursor:default">
+            <h3 style="font-size:15px">Post an opportunity</h3>
+            <input id="jTitle" placeholder="Title *"><input id="jComp" placeholder="Company *" style="margin-top:8px" value="${esc(e.company_name)}">
+            <textarea id="jDesc" rows="3" placeholder="Description *" style="margin-top:8px"></textarea>
+            <input id="jApply" placeholder="Application URL (https://…)" style="margin-top:8px">
+            <div class="grid g2" style="margin-top:8px">
+              <input id="jLoc" placeholder="Location"><input id="jRemote" placeholder="Remote / Hybrid / On-site">
+            </div>
+            <input id="jSkills" placeholder="Skills (comma-separated)" style="margin-top:8px">
+            <div class="grid g2" style="margin-top:8px">
+              <input id="jReq" placeholder="Required skills (comma-sep)"><input id="jPref" placeholder="Preferred skills (comma-sep)">
+            </div>
+            <button class="btn pri sm" style="margin-top:10px" onclick="Emp.post()">Publish (unverified until review)</button>
+          </div>
+          <div class="jcard" style="cursor:default">
+            <h3 style="font-size:15px">Applicants (${(applicants.data.applicants||[]).length})</h3>
+            <div class="grid" id="empApps">${(applicants.data.applicants||[]).map(x=>`
+              <div class="gapit" style="border-color:var(--line2)">
+                <b style="font-size:13px">${esc(x.candidate.display_name||"Candidate")}</b>
+                <span style="font-size:12px;color:var(--mut)"> → ${esc(x.job?x.job.title:"")}</span>
+                <div style="display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap">
+                  <span class="tag">${esc(x.application.status)}</span>
+                  <select class="stsel" onchange="Emp.setStatus('${x.application.id}',this.value)">
+                    ${["ASSESSMENT","INTERVIEW","OFFER","REJECTED"].map(s=>`<option>${s}</option>`).join("")}
+                  </select>
+                  <button class="btn gh sm" onclick="Apps.thread('${x.application.id}')">Chat</button>
+                </div>
+              </div>`).join("")||'<div class="empty" style="padding:12px">No applicants yet.</div>'}
+            </div>
+          </div>
+        </div>
+        <div class="sechead"><h2>Your postings (${(jobs.data.jobs||[]).length})</h2></div>
+        <div class="grid g3">${(jobs.data.jobs||[]).map(jcardHTML).join("")||'<div class="empty">Nothing posted yet.</div>'}</div>`;
+    }catch(e){$("#empWrap").innerHTML=`<div class="empty">${esc(e.message)}</div>`}
+  },
+  async register(){
+    const name=$("#eName").value.trim();
+    if(!name){toast("Company name is required","bad");return}
+    try{await api("/employers",{method:"POST",body:JSON.stringify({company_name:name,
+      website:$("#eSite").value.trim()||null,about:$("#eAbout").value.trim()||null})});
+      toast("Registered — verification pending","ok");this.render()}catch(e){toast(e.message,"bad")}
+  },
+  async post(){
+    const body={title:$("#jTitle").value.trim(),company:$("#jComp").value.trim(),
+      description:$("#jDesc").value.trim(),apply_url:$("#jApply").value.trim()||null,
+      location:$("#jLoc").value.trim()||"Remote",remote_type:$("#jRemote").value.trim()||"Remote",
+      category:"Jobs",skills:$("#jSkills").value.split(",").map(s=>s.trim()).filter(Boolean),
+      skills_required:$("#jReq").value.split(",").map(s=>s.trim()).filter(Boolean),
+      skills_preferred:$("#jPref").value.split(",").map(s=>s.trim()).filter(Boolean)};
+    if(!body.title||!body.company||!body.description){toast("Title, company and description are required","bad");return}
+    try{await api("/employers/jobs",{method:"POST",body:JSON.stringify(body)});
+      toast("Published — visible as unverified until reviewed","ok");this.render()}catch(e){toast(e.message,"bad")}
+  },
+  async setStatus(aid,status){
+    try{await api("/employers/applicants/"+aid,{method:"PATCH",body:JSON.stringify({status})});
+      toast("Status updated, candidate notified","ok");this.render()}catch(e){toast(e.message,"bad")}
+  }
+};
+
+/* ------------------------- messaging ---------------------------------- */
+const Msgs={aid:null,
+  open(aid){this.aid=aid;$("#msgOverlay").classList.add("on");this.refresh()},
+  async refresh(){
+    if(!this.aid)return;
+    try{const r=await api("/messages?application_id="+this.aid);
+      const uid=Auth.user&&Auth.user.id;
+      $("#msgThr").innerHTML=(r.data.messages||[]).map(m=>`
+        <div class="msgline ${m.sender_id===uid?"mine":""}">${esc(m.body)}
+        <span style="color:var(--dim);font-size:10.5px"> · ${ago(m.created_at)}</span></div>`).join("")
+        ||'<div class="empty" style="padding:10px">No messages yet — say hello.</div>';
+    }catch(e){$("#msgThr").innerHTML=`<div class="empty">${esc(e.message)}</div>`}
+  },
+  async send(){
+    const body=$("#msgIn").value.trim();
+    if(!body||!this.aid)return;
+    try{await api("/messages",{method:"POST",body:JSON.stringify({application_id:this.aid,body})});
+      $("#msgIn").value="";this.refresh()}catch(e){toast(e.message,"bad")}
+  }
+};
+const AppsChat={};
+Apps.thread=(aid)=>Msgs.open(aid);
+
+/* ------------------------- match panel + reports ---------------------- */
+Jobs.report=(id)=>{Jobs._rid=id;$("#rpDetails").value="";$("#reportOverlay").classList.add("on")};
+Jobs.sendReport=async()=>{
+  try{await api("/jobs/"+Jobs._rid+"/report",{method:"POST",body:JSON.stringify({
+    reason:$("#rpReason").value,details:$("#rpDetails").value.trim()})});
+    $("#reportOverlay").classList.remove("on");toast("Report received — a human will review it","ok");
+  }catch(e){toast(e.message,"bad")}
+};
+Jobs.loadMatch=async(id)=>{
+  const el=$("#dMatch");if(!el)return;
+  if(!Auth.user){el.innerHTML=`<div class="jcard" style="cursor:default"><p style="font-size:12.5px;color:var(--mut)">Sign in to see your personal, explainable match breakdown for this role.</p><button class="btn pri sm" onclick="Auth.open()">Sign in</button></div>`;return}
+  try{
+    const r=await api("/match?job_id="+id);
+    const m=r.data.match;
+    el.innerHTML=`<div class="jcard" style="cursor:default">
+      <h3 style="font-size:15px">AI match breakdown <span style="color:var(--mut);font-weight:400;font-size:12px">· explainable, no black box</span></h3>
+      <div style="display:flex;align-items:center;gap:12px;margin-top:8px">
+        <b style="font-size:24px">${Math.round(m.score*100)}%</b>
+        <div class="bar" style="flex:1;margin:0"><i style="width:${Math.round(m.score*100)}%"></i></div>
+      </div>
+      <div class="chips2" style="margin-top:10px">
+        ${(m.required.matched||[]).map(s=>`<span class="tag skill ok-chip">✓ ${esc(s)}</span>`).join("")}
+        ${(m.required.missing||[]).map(s=>`<span class="tag skill miss-chip">△ missing: ${esc(s)}</span>`).join("")}
+        ${(m.preferred.matched||[]).slice(0,4).map(s=>`<span class="tag skill">+ ${esc(s)}</span>`).join("")}
+      </div>
+      <ul class="ev">${(m.evidence||[]).map(x=>`<li>${esc(x)}</li>`).join("")}</ul>
+      <p style="font-size:11.5px;color:var(--dim);margin-top:8px">${esc(m.uncertainty)}</p>
+      ${r.data.hasResume?"":'<a href="#/resume" style="font-size:12.5px;color:#a5a4ff">→ Upload your resume for a personalized match</a>'}
+    </div>`;
+  }catch(e){el.innerHTML=`<div class="empty">${esc(e.message)}</div>`}
 };
 
 /* ------------------------- router ------------------------------------- */
@@ -658,6 +1045,10 @@ const Router={
       $("#jobsTitle").textContent=parts[0]==="challenges"?"Challenges & hackathons":parts[0]==="internships"?"Internships & fellowships":"All opportunities";
     }
     else if(parts[0]==="live")v="live";
+    else if(parts[0]==="dash")v="dash";
+    else if(parts[0]==="resume")v="resume";
+    else if(parts[0]==="roadmap")v="roadmap";
+    else if(parts[0]==="employer")v="employer";
     else if(parts[0]==="applications")v="applications";
     else if(parts[0]==="notifications")v="notifications";
     else if(parts[0]==="profile")v="profile";
@@ -670,6 +1061,10 @@ const Router={
     if(v==="detail")Views.detail(arg);
     if(v==="applications")Views.applications();
     if(v==="notifications")Views.notifications();
+    if(v==="dash")Views.dash();
+    if(v==="resume")Views.resume();
+    if(v==="roadmap")Views.roadmap(parts[1]?decodeURIComponent(parts[1]):null);
+    if(v==="employer")Views.employer();
     if(v==="profile")Views.profile();
     window.scrollTo(0,0);
   }

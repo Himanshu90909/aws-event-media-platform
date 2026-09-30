@@ -116,4 +116,98 @@ CREATE TABLE IF NOT EXISTS audit_events (
   metadata jsonb,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+
+-- ================= career-intelligence upgrade =================
+
+CREATE TABLE IF NOT EXISTS resumes (
+  id uuid PRIMARY KEY,
+  user_id uuid REFERENCES users(id) ON DELETE CASCADE,
+  file_name text NOT NULL,
+  content_type text NOT NULL,
+  text_content text NOT NULL,
+  parsed jsonb NOT NULL,
+  consent boolean NOT NULL DEFAULT false,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS resumes_user_idx ON resumes (user_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS consents (
+  id uuid PRIMARY KEY,
+  user_id uuid REFERENCES users(id) ON DELETE CASCADE,
+  kind text NOT NULL,
+  granted boolean NOT NULL,
+  note text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS ingestion_runs (
+  id uuid PRIMARY KEY,
+  source text NOT NULL,
+  status text NOT NULL,
+  stats jsonb DEFAULT '{}',
+  error text,
+  started_at timestamptz NOT NULL DEFAULT now(),
+  finished_at timestamptz
+);
+
+CREATE TABLE IF NOT EXISTS verification_events (
+  id uuid PRIMARY KEY,
+  job_id uuid REFERENCES jobs(id) ON DELETE CASCADE,
+  status text NOT NULL,
+  note text,
+  actor text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS verification_job_idx ON verification_events (job_id, created_at DESC);
+
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS last_verified_at timestamptz;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS skills_required jsonb DEFAULT '[]';
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS skills_preferred jsonb DEFAULT '[]';
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS posted_by_employer uuid;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS sponsored boolean DEFAULT false;
+
+CREATE TABLE IF NOT EXISTS job_reports (
+  id uuid PRIMARY KEY,
+  user_id uuid REFERENCES users(id) ON DELETE SET NULL,
+  job_id uuid REFERENCES jobs(id) ON DELETE CASCADE,
+  reason text NOT NULL,
+  details text,
+  status text NOT NULL DEFAULT 'open',
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS employers (
+  id uuid PRIMARY KEY,
+  user_id uuid REFERENCES users(id) ON DELETE CASCADE,
+  company_name text NOT NULL,
+  website text,
+  about text,
+  logo_url text,
+  verification_status text NOT NULL DEFAULT 'pending',
+  verified_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (user_id)
+);
+
+CREATE TABLE IF NOT EXISTS messages (
+  id uuid PRIMARY KEY,
+  application_id uuid REFERENCES applications(id) ON DELETE CASCADE,
+  sender_id uuid REFERENCES users(id) ON DELETE CASCADE,
+  recipient_id uuid REFERENCES users(id) ON DELETE CASCADE,
+  body text NOT NULL,
+  read_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS messages_application_idx ON messages (application_id, created_at);
+
+CREATE TABLE IF NOT EXISTS learning_progress (
+  user_id uuid REFERENCES users(id) ON DELETE CASCADE,
+  role text NOT NULL,
+  skill text NOT NULL,
+  status text NOT NULL DEFAULT 'todo',
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_id, role, skill)
+);
 """

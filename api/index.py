@@ -48,6 +48,11 @@ import uuid
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs, unquote, urlencode
 
+try:                              # Vercel: repo root on sys.path
+    from api import career as _career
+except ImportError:               # tests / local: sibling module
+    import career as _career
+
 SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$")
 UUID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I
@@ -530,7 +535,8 @@ PAGE_DEFAULT, PAGE_MAX = 20, 100
 ALLOWED_STATUSES = ["SAVED", "APPLIED", "SCREENING", "INTERVIEW", "OFFER", "REJECTED"]
 TRANSITIONS = {
     "SAVED":     {"APPLIED", "REJECTED"},
-    "APPLIED":   {"SCREENING", "INTERVIEW", "REJECTED"},
+    "APPLIED":   {"ASSESSMENT", "SCREENING", "INTERVIEW", "REJECTED"},
+    "ASSESSMENT": {"INTERVIEW", "REJECTED"},
     "SCREENING": {"INTERVIEW", "REJECTED"},
     "INTERVIEW": {"OFFER", "REJECTED"},
     "OFFER":     set(),
@@ -751,6 +757,9 @@ class MemStore:
         self.users, self.identities = {}, {}
         self.jobs, self.saved, self.apps = {}, {}, {}
         self.files, self.notes, self.audit = {}, {}, []
+        self.resumes, self.consents = {}, []
+        self.ingest_runs, self.verifications, self.reports = [], [], []
+        self.employers, self.messages, self.learning = {}, [], {}
         self._seed_jobs()
 
     # -- jobs ---------------------------------------------------------
@@ -770,6 +779,11 @@ class MemStore:
             "skills": j.get("skills", []), "posted_at": now - j.get("age_days", 2) * 86400,
             "expires_at": now + j.get("days_left", 30) * 86400,
             "is_verified": j.get("is_verified", False), "raw_source_payload": None,
+            "skills_required": j.get("skills_required", []),
+            "skills_preferred": j.get("skills_preferred", []),
+            "last_verified_at": now if j.get("is_verified") else None,
+            "posted_by_employer": j.get("posted_by_employer"),
+            "sponsored": bool(j.get("sponsored", False)),
             "created_at": now, "updated_at": now,
         }
 
@@ -875,6 +889,10 @@ class MemStore:
         self.apps = {k: a for k, a in self.apps.items() if a["user_id"] != uid}
         self.files = {k: f for k, f in self.files.items() if f["user_id"] != uid}
         self.notes.pop(uid, None)
+        self.resumes = {k: r for k, r in self.resumes.items() if r["user_id"] != uid}
+        self.consents = [c for c in self.consents if c["user_id"] != uid]
+        self.messages = [m for m in self.messages
+                         if m["sender_id"] != uid and m["recipient_id"] != uid]
         self.users.pop(uid, None)
 
     # -- jobs queries -------------------------------------------------
@@ -1003,6 +1021,202 @@ class MemStore:
         f["processing_status"] = status
         f["updated_at"] = time.time()
         return f
+
+    # -- resumes & consents ---------------------------------------------
+    def save_resume(self, uid, file_name, content_type, text, consent):
+        rid = uuid.uuid4().hex
+        parsed = _career.parse_resume(text)
+        now = time.time()
+        self.resumes[rid] = {"id": rid, "user_id": uid, "file_name": file_name,
+                             "content_type": content_type, "text_content": text,
+                             "parsed": parsed, "consent": bool(consent),
+                             "created_at": now, "updated_at": now}
+        self.grant_consent(uid, "resume_processing", True, "resume uploaded")
+        return self.resumes[rid]
+
+    def latest_resume(self, uid):
+        items = [r for r in self.resumes.values() if r["user_id"] == uid]
+        items.sort(key=lambda r: -r["created_at"])
+        return items[0] if items else None
+
+    def delete_resume(self, uid):
+        for rid in [k for k, r in self.resumes.items() if r["user_id"] == uid]:
+            del self.resumes[rid]
+        self.grant_consent(uid, "resume_processing", False, "resume deleted")
+
+    def update_resume_parsed(self, rid, parsed_patch):
+        r = self.resumes.get(rid)
+        if not r:
+            return None
+        p = dict(r["parsed"])
+        for k in ("skills", "projects"):
+            if isinstance(parsed_patch.get(k), list):
+                p[k] = parsed_patch[k]
+        for k in ("education", "graduation_year", "experience_years"):
+            if k in parsed_patch:
+                p[k] = parsed_patch[k]
+        r["parsed"] = p
+        r["updated_at"] = time.time()
+        return r
+
+    def grant_consent(self, uid, kind, granted, note=""):
+        self.consents.append({"id": uuid.uuid4().hex, "user_id": uid, "kind": kind,
+                              "granted": bool(granted), "note": note or None,
+                              "created_at": time.time()})
+
+    def consents_of(self, uid):
+        return sorted((c for c in self.consents if c["user_id"] == uid),
+                      key=lambda c: c["created_at"], reverse=True)
+
+    # -- ingestion / verification / reports -----------------------------
+    def log_ingestion(self, source, status, stats=None, error=None):
+        run = {"id": uuid.uuid4().hex, "source": source, "status": status,
+               "stats": stats or {}, "error": error,
+               "started_at": time.time(), "finished_at": time.time()}
+        self.ingest_runs.append(run)
+        if len(self.ingest_runs) > 200:
+            self.ingest_runs = self.ingest_runs[-200:]
+        return run
+
+    def ingestion_runs(self, limit=20):
+        return sorted(self.ingest_runs, key=lambda r: -r["started_at"])[:limit]
+
+    def add_verification(self, job_id, status, note, actor):
+        ev = {"id": uuid.uuid4().hex, "job_id": job_id, "status": status,
+              "note": note, "actor": actor, "created_at": time.time()}
+        self.verifications.append(ev)
+        return ev
+
+    def verifications_of(self, job_id):
+        return sorted((v for v in self.verifications if v["job_id"] == job_id),
+                      key=lambda v: -v["created_at"])[:20]
+
+    def report_job(self, uid, job_id, reason, details):
+        rep = {"id": uuid.uuid4().hex, "user_id": uid, "job_id": job_id,
+               "reason": reason, "details": details or None,
+               "status": "open", "created_at": time.time()}
+        self.reports.append(rep)
+        return rep
+
+    # -- employers -------------------------------------------------------
+    def register_employer(self, uid, company_name, website, about, logo_url):
+        for e in self.employers.values():
+            if e["user_id"] == uid:
+                return e, False
+        eid = uuid.uuid4().hex
+        now = time.time()
+        e = {"id": eid, "user_id": uid, "company_name": company_name,
+             "website": website, "about": about, "logo_url": logo_url,
+             "verification_status": "pending", "verified_at": None,
+             "created_at": now, "updated_at": now}
+        self.employers[eid] = e
+        return e, True
+
+    def employer_by_user(self, uid):
+        for e in self.employers.values():
+            if e["user_id"] == uid:
+                return e
+        return None
+
+    def employer_jobs(self, eid):
+        return sorted((j for j in self.jobs.values()
+                       if j.get("posted_by_employer") == eid),
+                      key=lambda j: -j["created_at"])
+
+    def employer_applications(self, eid, page=1, limit=50):
+        own = {j["id"] for j in self.employer_jobs(eid)}
+        items = [a for a in self.apps.values() if a["job_id"] in own]
+        items.sort(key=lambda a: -a["updated_at"])
+        total = len(items)
+        return items[(page - 1) * limit: page * limit], total
+
+    def post_job(self, eid, raw):
+        j = _career.normalize_job(raw, "employer-direct")
+        now = time.time()
+        j.update({"id": uuid.uuid4().hex, "is_verified": False,
+                  "posted_by_employer": eid,
+                  "posted_at": now,
+                  "expires_at": raw.get("expires_at") or now + 60 * 86400,
+                  "raw_source_payload": None,
+                  "created_at": now, "updated_at": now})
+        j["type"] = raw.get("type") or CATEGORY_TO_TYPE.get(j["category"], "JOB")
+        self.jobs[j["id"]] = j
+        return j
+
+    def patch_employer(self, eid, key, value):
+        e = self.employers.get(eid)
+        if not e or key not in ("about", "website", "logo_url"):
+            return None
+        e[key] = value
+        e["updated_at"] = time.time()
+        return e
+
+    def verify_employer(self, eid, status):
+        e = self.employers.get(eid)
+        if not e:
+            return None
+        e["verification_status"] = status
+        e["verified_at"] = time.time() if status == "verified" else None
+        e["updated_at"] = time.time()
+        return e
+
+    def set_job_verification(self, jid, status, actor, note=""):
+        j = self.jobs.get(jid)
+        if not j:
+            return None
+        j["is_verified"] = status == "verified"
+        j["last_verified_at"] = time.time()
+        self.add_verification(jid, status, note, actor)
+        return j
+
+    # -- application messaging (employer <-> candidate) -------------------
+    def app_parties(self, aid):
+        a = self.apps.get(aid)
+        if not a:
+            return None, None, None
+        j = self.jobs.get(a["job_id"])
+        employer = self.employers.get(j.get("posted_by_employer")) if j else None
+        return a, j, employer
+
+    def send_message(self, aid, sender_id, body):
+        a, j, employer = self.app_parties(aid)
+        if not a:
+            return None, "NOT_FOUND"
+        recipient = None
+        if sender_id == a["user_id"] and employer:
+            recipient = employer["user_id"]
+        elif employer and sender_id == employer["user_id"]:
+            recipient = a["user_id"]
+        else:
+            return None, "FORBIDDEN"
+        m = {"id": uuid.uuid4().hex, "application_id": aid, "sender_id": sender_id,
+             "recipient_id": recipient, "body": body, "read_at": None,
+             "created_at": time.time()}
+        self.messages.append(m)
+        return m, None
+
+    def messages_of(self, aid, uid):
+        a, j, employer = self.app_parties(aid)
+        if not a:
+            return None, "NOT_FOUND"
+        if uid != a["user_id"] and not (employer and uid == employer["user_id"]):
+            return None, "FORBIDDEN"
+        out = [m for m in self.messages if m["application_id"] == aid]
+        for m in out:
+            if m["recipient_id"] == uid and not m["read_at"]:
+                m["read_at"] = time.time()
+        return sorted(out, key=lambda m: m["created_at"]), None
+
+    # -- learning progress ------------------------------------------------
+    def set_progress(self, uid, role, skill, status):
+        if status not in ("todo", "in_progress", "done"):
+            return None
+        self.learning[(uid, role, skill)] = {"status": status, "updated_at": time.time()}
+        return self.learning[(uid, role, skill)]
+
+    def progress_of(self, uid, role):
+        return {s: v["status"] for (u, r, s), v in self.learning.items()
+                if u == uid and r == role}
 
     # -- notifications -------------------------------------------------
     def notify(self, uid, ntype, title, body):
@@ -1363,6 +1577,210 @@ class PgStore(MemStore):
                 "verified": v, "closing_soon": c}
 
 
+    # ---------------- career intelligence (SQL) ------------------------------
+    def save_resume(self, uid, file_name, content_type, text, consent):
+        rid = uuid.uuid4().hex
+        parsed = _career.parse_resume(text)
+        self._q("INSERT INTO resumes (id, user_id, file_name, content_type, text_content,"
+                " parsed, consent) VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s)",
+                (rid, uid, file_name, content_type, text, json.dumps(parsed), bool(consent)))
+        self.grant_consent(uid, "resume_processing", True, "resume uploaded")
+        return self.latest_resume(uid)
+
+    def latest_resume(self, uid):
+        rows = self._q("SELECT * FROM resumes WHERE user_id = %s "
+                       "ORDER BY created_at DESC LIMIT 1", (uid,))
+        return rows[0] if rows else None
+
+    def delete_resume(self, uid):
+        self._q("DELETE FROM resumes WHERE user_id = %s", (uid,))
+        self.grant_consent(uid, "resume_processing", False, "resume deleted")
+
+    def update_resume_parsed(self, rid, parsed_patch):
+        rows = self._q("SELECT parsed FROM resumes WHERE id = %s", (rid,))
+        if not rows:
+            return None
+        p = dict(rows[0]["parsed"])
+        for k in ("skills", "projects"):
+            if isinstance(parsed_patch.get(k), list):
+                p[k] = parsed_patch[k]
+        for k in ("education", "graduation_year", "experience_years"):
+            if k in parsed_patch:
+                p[k] = parsed_patch[k]
+        self._q("UPDATE resumes SET parsed = %s::jsonb, updated_at = now() WHERE id = %s",
+                (json.dumps(p), rid))
+        return self.latest_resume_by_id(rid)
+
+    def latest_resume_by_id(self, rid):
+        rows = self._q("SELECT * FROM resumes WHERE id = %s", (rid,))
+        return rows[0] if rows else None
+
+    def grant_consent(self, uid, kind, granted, note=""):
+        self._q("INSERT INTO consents (id, user_id, kind, granted, note) "
+                "VALUES (%s, %s, %s, %s, %s)",
+                (uuid.uuid4().hex, uid, kind, bool(granted), note or None))
+
+    def consents_of(self, uid):
+        return self._q("SELECT * FROM consents WHERE user_id = %s "
+                       "ORDER BY created_at DESC LIMIT 50", (uid,))
+
+    def log_ingestion(self, source, status, stats=None, error=None):
+        rid = uuid.uuid4().hex
+        self._q("INSERT INTO ingestion_runs (id, source, status, stats, error, finished_at)"
+                " VALUES (%s, %s, %s, %s::jsonb, %s, now())",
+                (rid, source, status, json.dumps(stats or {}), error))
+        return {"id": rid, "source": source, "status": status, "stats": stats or {},
+                "error": error, "started_at": time.time(), "finished_at": time.time()}
+
+    def ingestion_runs(self, limit=20):
+        return self._q("SELECT * FROM ingestion_runs ORDER BY started_at DESC LIMIT %s",
+                       (limit,))
+
+    def add_verification(self, job_id, status, note, actor):
+        self._q("INSERT INTO verification_events (id, job_id, status, note, actor)"
+                " VALUES (%s, %s, %s, %s, %s)",
+                (uuid.uuid4().hex, job_id, status, note, actor))
+        return {"job_id": job_id, "status": status, "note": note, "actor": actor}
+
+    def verifications_of(self, job_id):
+        return self._q("SELECT * FROM verification_events WHERE job_id = %s "
+                       "ORDER BY created_at DESC LIMIT 20", (job_id,))
+
+    def report_job(self, uid, job_id, reason, details):
+        rep_id = uuid.uuid4().hex
+        self._q("INSERT INTO job_reports (id, user_id, job_id, reason, details)"
+                " VALUES (%s, %s, %s, %s, %s)", (rep_id, uid, job_id, reason, details or None))
+        return {"id": rep_id, "user_id": uid, "job_id": job_id, "reason": reason,
+                "details": details or None, "status": "open"}
+
+    def register_employer(self, uid, company_name, website, about, logo_url):
+        rows = self._q("SELECT * FROM employers WHERE user_id = %s", (uid,))
+        if rows:
+            return rows[0], False
+        eid = uuid.uuid4().hex
+        self._q("INSERT INTO employers (id, user_id, company_name, website, about, logo_url)"
+                " VALUES (%s, %s, %s, %s, %s, %s)",
+                (eid, uid, company_name, website, about, logo_url))
+        rows = self._q("SELECT * FROM employers WHERE id = %s", (eid,))
+        return rows[0], True
+
+    def employer_by_user(self, uid):
+        rows = self._q("SELECT * FROM employers WHERE user_id = %s", (uid,))
+        return rows[0] if rows else None
+
+    def employer_jobs(self, eid):
+        return self._q("SELECT * FROM jobs WHERE posted_by_employer = %s "
+                       "ORDER BY created_at DESC", (eid,))
+
+    def employer_applications(self, eid, page=1, limit=50):
+        base = ("SELECT a.* FROM applications a JOIN jobs j ON j.id = a.job_id "
+                "WHERE j.posted_by_employer = %s")
+        total = self._q("SELECT count(*) AS n FROM (" + base + ") t", (eid,))[0]["n"]
+        rows = self._q(base + " ORDER BY a.updated_at DESC LIMIT %s OFFSET %s",
+                       (eid, limit, (page - 1) * limit))
+        return rows, total
+
+    def post_job(self, eid, raw):
+        j = _career.normalize_job(raw, "employer-direct")
+        jid = uuid.uuid4().hex
+        now = time.time()
+        jtype = raw.get("type") or CATEGORY_TO_TYPE.get(j["category"], "JOB")
+        self._q(
+            "INSERT INTO jobs (id, external_id, source, title, company, description, apply_url,"
+            " employment_type, experience_level, location, remote_type, salary_min, salary_max,"
+            " salary_currency, category, type, skills, skills_required, skills_preferred,"
+            " posted_at, expires_at, is_verified, posted_by_employer, created_at, updated_at)"
+            " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,"
+            "%s::jsonb, now(), to_timestamp(%s), false, %s, now(), now())",
+            (jid, j["external_id"], "employer-direct", j["title"], j["company"],
+             j["description"], j["apply_url"], j["employment_type"], j["experience_level"],
+             j["location"], j["remote_type"], j["salary_min"], j["salary_max"],
+             j["salary_currency"], j["category"], jtype, json.dumps(j["skills"]),
+             json.dumps(j["skills_required"]), json.dumps(j["skills_preferred"]),
+             j["expires_at"] or now + 60 * 86400, eid))
+        rows = self._q("SELECT * FROM jobs WHERE id = %s", (jid,))
+        return rows[0]
+
+    def patch_employer(self, eid, key, value):
+        if key not in ("about", "website", "logo_url"):
+            return None
+        self._q(f"UPDATE employers SET {key} = %s, updated_at = now() WHERE id = %s",
+                (value, eid))
+        rows = self._q("SELECT * FROM employers WHERE id = %s", (eid,))
+        return rows[0] if rows else None
+
+    def verify_employer(self, eid, status):
+        self._q("UPDATE employers SET verification_status = %s, "
+                "verified_at = CASE WHEN %s = 'verified' THEN now() ELSE NULL END, "
+                "updated_at = now() WHERE id = %s", (status, status, eid))
+        rows = self._q("SELECT * FROM employers WHERE id = %s", (eid,))
+        return rows[0] if rows else None
+
+    def set_job_verification(self, jid, status, actor, note=""):
+        self._q("UPDATE jobs SET is_verified = %s, last_verified_at = now(), "
+                "updated_at = now() WHERE id = %s", (status == "verified", jid))
+        self.add_verification(jid, status, note, actor)
+        rows = self._q("SELECT * FROM jobs WHERE id = %s", (jid,))
+        return rows[0] if rows else None
+
+    def app_parties(self, aid):
+        a = self.get_application(aid)
+        if not a:
+            return None, None, None
+        j = self.get_job(a["job_id"])
+        emp = None
+        if j and j.get("posted_by_employer"):
+            rows = self._q("SELECT * FROM employers WHERE id = %s", (j["posted_by_employer"],))
+            emp = rows[0] if rows else None
+        return a, j, emp
+
+    def send_message(self, aid, sender_id, body):
+        a, j, employer = self.app_parties(aid)
+        if not a:
+            return None, "NOT_FOUND"
+        recipient = None
+        if sender_id == a["user_id"] and employer:
+            recipient = employer["user_id"]
+        elif employer and sender_id == employer["user_id"]:
+            recipient = a["user_id"]
+        else:
+            return None, "FORBIDDEN"
+        mid = uuid.uuid4().hex
+        self._q("INSERT INTO messages (id, application_id, sender_id, recipient_id, body)"
+                " VALUES (%s, %s, %s, %s, %s)", (mid, aid, sender_id, recipient, body))
+        rows = self._q("SELECT * FROM messages WHERE id = %s", (mid,))
+        return (rows[0] if rows else None), None
+
+    def messages_of(self, aid, uid):
+        a, j, employer = self.app_parties(aid)
+        if not a:
+            return None, "NOT_FOUND"
+        if uid != a["user_id"] and not (employer and uid == employer["user_id"]):
+            return None, "FORBIDDEN"
+        out = self._q("SELECT * FROM messages WHERE application_id = %s "
+                      "ORDER BY created_at ASC", (aid,))
+        for m in out:
+            if m["recipient_id"] == uid and not m["read_at"]:
+                self._q("UPDATE messages SET read_at = now() WHERE id = %s", (m["id"],))
+                m["read_at"] = time.time()
+        return out, None
+
+    def set_progress(self, uid, role, skill, status):
+        if status not in ("todo", "in_progress", "done"):
+            return None
+        self._q("INSERT INTO learning_progress (user_id, role, skill, status, updated_at)"
+                " VALUES (%s, %s, %s, %s, now())"
+                " ON CONFLICT (user_id, role, skill) DO UPDATE "
+                "SET status = EXCLUDED.status, updated_at = now()",
+                (uid, role, skill, status))
+        return {"user_id": uid, "role": role, "skill": skill, "status": status}
+
+    def progress_of(self, uid, role):
+        rows = self._q("SELECT skill, status FROM learning_progress "
+                       "WHERE user_id = %s AND role = %s", (uid, role))
+        return {r["skill"]: r["status"] for r in rows}
+
+
 _store = MemStore()
 if STORAGE_MODE == "postgres":
     try:
@@ -1436,6 +1854,10 @@ def job_public(j, saved=False):
             "postedAt": j["posted_at"], "expiresAt": j["expires_at"],
             "description": j["description"], "applyUrl": j.get("apply_url"),
             "source": j["source"], "saved": saved,
+            "skillsRequired": j.get("skills_required") or [],
+            "skillsPreferred": j.get("skills_preferred") or [],
+            "lastVerifiedAt": j.get("last_verified_at"),
+            "sponsored": bool(j.get("sponsored", False)),
             "live": bool(j.get("live"))}
 
 
@@ -1810,7 +2232,9 @@ class MFHandler(handler):
                 uid = self._uid()
                 return self._send(200, envelope({
                     "job": job_public(j, _store.is_saved(uid, r[1]) if uid else False),
-                    "similar": [job_public(s) for s in _store.similar_jobs(r[1])]}))
+                    "similar": [job_public(s) for s in _store.similar_jobs(r[1])],
+                    "verificationHistory": _store.verifications_of(r[1]),
+                    "cautions": _career.fraud_signals(j.get("description") or "")}))
             if n == 3 and r[2] == "save":
                 uid = self._require_auth()
                 if not uid:
@@ -1843,6 +2267,28 @@ class MFHandler(handler):
                     _store.notify(uid, "application", "Saved to your pipeline",
                                   f"{j['title']} @ {j['company']} is now in SAVED.")
                 return self._send(200, envelope({"application": a, "created": created}))
+            if n == 3 and r[2] == "report" and method == "POST":
+                uid = self._require_auth()
+                if not uid:
+                    return
+                b = self._body()
+                reason = str((b or {}).get("reason") or "").strip().lower()
+                if reason not in ("inaccurate", "expired", "fraud", "duplicate"):
+                    return self._send(400, envelope(None, error={
+                        "code": "BAD_REASON",
+                        "message": "reason must be inaccurate | expired | fraud | duplicate"}))
+                details = str((b or {}).get("details") or "")[:2000]
+                _store.report_job(uid, r[1], reason, details)
+                _store.audit_event(uid, "job.report", None,
+                                   {"jobId": r[1], "reason": reason})
+                return self._send(200, envelope(
+                    {"reported": True,
+                     "note": "Thanks — a maintainer will review this listing. "
+                             "Reports are human-reviewed; listings are never "
+                             "auto-removed by reports alone."}))
+            if n == 3 and r[2] == "verification" and method == "GET":
+                return self._send(200, envelope(
+                    {"history": _store.verifications_of(r[1])}))
             return self._send(404, envelope(None, error={"code": "NOT_FOUND",
                                                           "message": "Unknown jobs route"}))
 
@@ -1878,6 +2324,365 @@ class MFHandler(handler):
                 _store.delete_application(aid)
                 _store.audit_event(uid, "application.delete", None, {"applicationId": aid})
                 return self._send(200, envelope({"deleted": True}))
+
+        # ---------------- resume & consent -------------------------------
+        if head == "resume" and n == 1:
+            uid = self._require_auth()
+            if not uid:
+                return
+            res = _store.latest_resume(uid)
+            if method == "GET":
+                return self._send(200, envelope({"resume": res}))
+            if method == "POST":
+                b = self._body()
+                if not isinstance(b, dict) or not b.get("consent"):
+                    return self._send(400, envelope(None, error={
+                        "code": "CONSENT_REQUIRED",
+                        "message": "Explicit consent is required to process a resume."}))
+                text = str(b.get("text") or "").strip()
+                if not (50 <= len(text) <= 100000):
+                    return self._send(400, envelope(None, error={
+                        "code": "BAD_TEXT",
+                        "message": "Paste your resume text (50–100,000 characters). "
+                                   "PDF parsing tip: copy the text out of the PDF first."}))
+                if not rate_ok(f"resume:{uid}", 10):
+                    return self._send(429, envelope(None, error={
+                        "code": "RATE_LIMITED", "message": "Too many resume uploads"}))
+                res = _store.save_resume(uid, str(b.get("file_name") or "resume.txt")[:200],
+                                         "text/plain", text, True)
+                _store.audit_event(uid, "resume.upload", None, {"length": len(text)})
+                return self._send(200, envelope({"resume": res}))
+            if method == "PATCH":
+                b = self._body()
+                if not isinstance(b, dict) or not res:
+                    return self._send(400, envelope(None, error={
+                        "code": "BAD_REQUEST", "message": "Nothing to correct yet"}))
+                res = _store.update_resume_parsed(res["id"], b.get("parsed") or {})
+                _store.audit_event(uid, "resume.correct", None, {})
+                return self._send(200, envelope({"resume": res}))
+            if method == "DELETE":
+                _store.delete_resume(uid)
+                _store.audit_event(uid, "resume.delete", None, {})
+                return self._send(200, envelope({"deleted": True}))
+
+        # ---------------- explainable matching -----------------------------
+        if head == "match" and n == 1 and method == "GET":
+            uid = self._require_auth()
+            if not uid:
+                return
+            jid = q.get("job_id", [None])[0]
+            j = _store.get_job(jid) if jid else None
+            if not j:
+                return self._send(404, envelope(None, error={
+                    "code": "NOT_FOUND", "message": "job_id is required and must exist"}))
+            res = _store.latest_resume(uid)
+            parsed = (res or {}).get("parsed") or {}
+            return self._send(200, envelope({
+                "match": _career.match_job(parsed, j),
+                "job": job_public(j),
+                "hasResume": bool(res)}))
+
+        if head == "match" and n == 2 and r[1] == "recommended" and method == "GET":
+            uid = self._require_auth()
+            if not uid:
+                return
+            res = _store.latest_resume(uid)
+            parsed = (res or {}).get("parsed") or {}
+            jobs, _t = _store.query_jobs(None, None, None, None, None, None, 1, 100)
+            scored = []
+            for j in jobs:
+                m = _career.match_job(parsed, j)
+                scored.append((m["score"], job_public(j), m))
+            scored.sort(key=lambda t: -t[0])
+            return self._send(200, envelope({
+                "recommended": [{"job": jp, "match": m} for _s, jp, m in scored[:10]],
+                "hasResume": bool(res)}))
+
+        # ---------------- career roadmap ------------------------------------
+        if head == "roadmap" and n == 1 and method == "GET":
+            uid = self._require_auth()
+            if not uid:
+                return
+            role = (q.get("role", [""])[0] or "").strip()
+            if not role:
+                return self._send(200, envelope({"roles": sorted(_career.ROLE_LIBRARY)}))
+            res = _store.latest_resume(uid)
+            parsed = (res or {}).get("parsed") or {}
+            rd = _career.roadmap_for(parsed, role)
+            if "error" in rd:
+                return self._send(400, envelope(None, error={
+                    "code": "UNKNOWN_ROLE", "message": "Pick a role from the list",
+                    "roles": rd["roles"]}))
+            prog = _store.progress_of(uid, role)
+            for item in rd["skills_gap"]:
+                item["status"] = prog.get(item["skill"], "todo")
+            return self._send(200, envelope({"roadmap": rd, "hasResume": bool(res)}))
+
+        if head == "roadmap" and n == 2 and r[1] == "progress" and method == "POST":
+            uid = self._require_auth()
+            if not uid:
+                return
+            b = self._body() or {}
+            skill = str(b.get("skill") or "").strip()[:80]
+            role = str(b.get("role") or "").strip()[:80]
+            status = str(b.get("status") or "").strip()
+            if not skill or role not in _career.ROLE_LIBRARY:
+                return self._send(400, envelope(None, error={
+                    "code": "BAD_REQUEST", "message": "skill and a valid role are required"}))
+            out = _store.set_progress(uid, role, skill, status)
+            if not out:
+                return self._send(400, envelope(None, error={
+                    "code": "BAD_STATUS",
+                    "message": "status must be todo | in_progress | done"}))
+            return self._send(200, envelope({"progress": out}))
+
+        # ---------------- ingestion transparency ---------------------------
+        if head == "ingestion" and n == 1 and method == "GET":
+            return self._send(200, envelope({"runs": _store.ingestion_runs(20)}))
+
+        # ---------------- application messaging ------------------------------
+        if head == "messages" and n == 1:
+            uid = self._require_auth()
+            if not uid:
+                return
+            if method == "POST":
+                b = self._body() or {}
+                aid = str(b.get("application_id") or "")
+                body = str(b.get("body") or "").strip()[:4000]
+                if not body:
+                    return self._send(400, envelope(None, error={
+                        "code": "BAD_BODY", "message": "Message body is required"}))
+                m, err = _store.send_message(aid, uid, body)
+                if err == "NOT_FOUND":
+                    return self._send(404, envelope(None, error={
+                        "code": "NOT_FOUND", "message": "Application not found"}))
+                if err == "FORBIDDEN":
+                    return self._send(403, envelope(None, error={
+                        "code": "FORBIDDEN",
+                        "message": "Only the applicant and the employer of this "
+                                   "job can message on this application"}))
+                a, _j, _e = _store.app_parties(aid)
+                _store.notify(m["recipient_id"], "message",
+                               "New message on an application", body[:120])
+                _store.audit_event(uid, "message.send", None, {"applicationId": aid})
+                return self._send(200, envelope({"message": m}))
+            if method == "GET":
+                aid = q.get("application_id", [None])[0]
+                if not aid:
+                    return self._send(400, envelope(None, error={
+                        "code": "BAD_REQUEST", "message": "application_id is required"}))
+                msgs, err = _store.messages_of(aid, uid)
+                if err == "NOT_FOUND":
+                    return self._send(404, envelope(None, error={
+                        "code": "NOT_FOUND", "message": "Application not found"}))
+                if err == "FORBIDDEN":
+                    return self._send(403, envelope(None, error={
+                        "code": "FORBIDDEN",
+                        "message": "Only the applicant and the employer of this job "
+                                   "can read this thread"}))
+                return self._send(200, envelope({"messages": msgs}))
+
+        # ---------------- employer portal ------------------------------------
+        if head == "employers" and n == 1:
+            uid = self._require_auth()
+            if not uid:
+                return
+            if method == "POST":
+                b = self._body() or {}
+                name = str(b.get("company_name") or "").strip()[:120]
+                if not name:
+                    return self._send(400, envelope(None, error={
+                        "code": "BAD_REQUEST", "message": "company_name is required"}))
+                website = str(b.get("website") or "").strip()[:300]
+                if website and not URL_RE.match(website):
+                    return self._send(400, envelope(None, error={
+                        "code": "BAD_URL", "message": "website must be a valid http(s) URL"}))
+                e, created = _store.register_employer(uid, name, website or None,
+                                                     str(b.get("about") or "")[:4000] or None,
+                                                     str(b.get("logo_url") or "").strip()[:500] or None)
+                _store.audit_event(uid, "employer.register" if created else "employer.exists",
+                                   None, {"employerId": e["id"]})
+                return self._send(200, envelope({
+                    "employer": e, "created": created,
+                    "note": "Verification is manual. Your company shows a "
+                            "'pending verification' state until a human reviews it — "
+                            "no badges are shown before that."}))
+            if method == "GET":
+                e = _store.employer_by_user(uid)
+                return self._send(200, envelope({"employer": e}))
+
+        if head == "employers" and n == 2 and r[1] == "me" and method == "PATCH":
+            uid = self._require_auth()
+            if not uid:
+                return
+            e = _store.employer_by_user(uid)
+            if not e:
+                return self._send(404, envelope(None, error={
+                    "code": "NOT_EMPLOYER", "message": "Register as an employer first"}))
+            b = self._body() or {}
+            updates = {}
+            if "about" in b:
+                updates["about"] = str(b["about"])[:4000] or None
+            if "website" in b:
+                w = str(b["website"]).strip()[:300]
+                if w and not URL_RE.match(w):
+                    return self._send(400, envelope(None, error={
+                        "code": "BAD_URL", "message": "website must be a valid http(s) URL"}))
+                updates["website"] = w or None
+            if "logo_url" in b:
+                updates["logo_url"] = str(b["logo_url"]).strip()[:500] or None
+            for k, v in updates.items():
+                _store.patch_employer(e["id"], k, v)
+            return self._send(200, envelope({"employer": _store.employer_by_user(uid)}))
+
+        if head == "employers" and n == 2 and r[1] == "jobs":
+            uid = self._require_auth()
+            if not uid:
+                return
+            e = _store.employer_by_user(uid)
+            if not e:
+                return self._send(404, envelope(None, error={
+                    "code": "NOT_EMPLOYER", "message": "Register as an employer first"}))
+            if method == "POST":
+                if not rate_ok(f"postjob:{uid}", 10):
+                    return self._send(429, envelope(None, error={
+                        "code": "RATE_LIMITED", "message": "Too many posts, slow down"}))
+                try:
+                    j = _store.post_job(e["id"], self._body() or {})
+                except ValueError as exc:
+                    return self._send(400, envelope(None, error={
+                        "code": "BAD_JOB", "message": str(exc)}))
+                _store.log_ingestion("employer-direct", "ok",
+                                     {"imported": 1, "employer": e["company_name"]})
+                _store.audit_event(uid, "employer.job.post", None, {"jobId": j["id"]})
+                return self._send(200, envelope({
+                    "job": job_public(j),
+                    "note": "Your post is live immediately but shows as unverified "
+                            "until an admin verifies it. Verification never happens "
+                            "automatically."}))
+            if method == "GET":
+                return self._send(200, envelope(
+                    {"jobs": [job_public(j) for j in _store.employer_jobs(e["id"])],
+                     "employer": e}))
+
+        if head == "employers" and n == 2 and r[1] == "applicants" and method == "GET":
+            uid = self._require_auth()
+            if not uid:
+                return
+            e = _store.employer_by_user(uid)
+            if not e:
+                return self._send(404, envelope(None, error={
+                    "code": "NOT_EMPLOYER", "message": "Register as an employer first"}))
+            page, limit = self._page(q)
+            apps, total = _store.employer_applications(e["id"], page, limit)
+            out = []
+            for a in apps:
+                cand = _store.get_user(a["user_id"]) or {}
+                job = _store.get_job(a["job_id"]) or {}
+                out.append({
+                    "application": a,
+                    "candidate": {"display_name": cand.get("display_name"),
+                                   "email": cand.get("email"),
+                                   "avatar_url": cand.get("avatar_url"),
+                                   "headline": cand.get("headline")},
+                    "job": {"id": job.get("id"), "title": job.get("title")}})
+            return self._send(200, envelope(
+                {"applicants": out, "employer": e}, self._meta(page, limit, total)))
+
+        if head == "employers" and n == 3 and r[1] == "applicants" and method == "PATCH":
+            uid = self._require_auth()
+            if not uid:
+                return
+            e = _store.employer_by_user(uid)
+            if not e:
+                return self._send(404, envelope(None, error={
+                    "code": "NOT_EMPLOYER", "message": "Register as an employer first"}))
+            a, _j, emp = _store.app_parties(r[2])
+            if not a or not emp or emp["user_id"] != uid:
+                return self._send(403, envelope(None, error={
+                    "code": "FORBIDDEN",
+                    "message": "You can only update applications to your own postings"}))
+            b = self._body() or {}
+            patch = {}
+            if "status" in b:
+                patch["status"] = str(b["status"]).upper()
+            if "next_action" in b:
+                patch["next_action"] = str(b["next_action"])[:400]
+            a2, err = _store.update_application(a["id"], patch)
+            if err == "INVALID_TRANSITION":
+                return self._send(422, envelope(None, error={
+                    "code": "INVALID_TRANSITION",
+                    "message": f"Cannot move {a['status']} -> {patch.get('status')}"}))
+            if err:
+                return self._send(404, envelope(None, error={
+                    "code": "NOT_FOUND", "message": "Application not found"}))
+            _store.audit_event(uid, "employer.application.update", None,
+                               {"applicationId": a["id"], "status": patch.get("status")})
+            if patch.get("status"):
+                _store.notify(a["user_id"], "application",
+                              f"Application moved to {patch['status']}",
+                              f"{_store.get_job(a['job_id'])['title']} — status updated "
+                              f"by the employer.")
+            return self._send(200, envelope({"application": a2}))
+
+        # ---------------- privacy: account export ------------------------------
+        if head == "privacy" and n == 2 and r[1] == "export" and method == "GET":
+            uid = self._require_auth()
+            if not uid:
+                return
+            apps, _t = _store.applications(uid, None, 1, 500)
+            export = {
+                "exportedAt": time.time(),
+                "user": _store.get_user(uid),
+                "consents": _store.consents_of(uid),
+                "resume": _store.latest_resume(uid),
+                "applications": [{**a, "job": job_public(_store.get_job(a["job_id"]) or {})}
+                                 for a in apps],
+                "saved_jobs": [job_public(_store.get_job(s) or {}) for s in _store.saved_jobs(uid)],
+                "notifications": _store.notifications(uid),
+                "employer": _store.employer_by_user(uid),
+            }
+            _store.audit_event(uid, "account.export", None, {})
+            return self._send(200, envelope({"export": export}))
+
+        # ---------------- admin (manual verification) ---------------------------
+        if head == "admin" and n == 3 and method == "POST":
+            token = os.environ.get("ADMIN_TOKEN")
+            auth = self.headers.get("Authorization") or ""
+            if not token:
+                return self._send(501, envelope(None, error={
+                    "code": "NOT_CONFIGURED",
+                    "message": "ADMIN_TOKEN is not configured; verification is manual "
+                               "until it is set"}))
+            if auth != f"Bearer {token}":
+                return self._send(401, envelope(None, error={
+                    "code": "UNAUTHORIZED", "message": "Invalid admin token"}))
+            b = self._body() or {}
+            status = str(b.get("status") or "").lower()
+            if status not in ("verified", "rejected", "unverified"):
+                return self._send(400, envelope(None, error={
+                    "code": "BAD_STATUS",
+                    "message": "status must be verified | rejected | unverified"}))
+            if r[1] == "employers":
+                e = _store.verify_employer(r[2], status)
+                if not e:
+                    return self._send(404, envelope(None, error={
+                        "code": "NOT_FOUND", "message": "Employer not found"}))
+                if status == "verified" and e.get("user_id"):
+                    _store.notify(e["user_id"], "account", "Company verified",
+                                  f"{e['company_name']} is now verified. Your postings "
+                                  f"can earn the verified badge.")
+                _store.audit_event(None, "admin.employer.verify", None,
+                                   {"employerId": r[2], "status": status})
+                return self._send(200, envelope({"employer": e}))
+            if r[1] == "jobs":
+                j = _store.set_job_verification(r[2], status, "admin", "manual review")
+                if not j:
+                    return self._send(404, envelope(None, error={
+                        "code": "NOT_FOUND", "message": "Job not found"}))
+                _store.audit_event(None, "admin.job.verify", None,
+                                   {"jobId": r[2], "status": status})
+                return self._send(200, envelope({"job": job_public(j)}))
 
         return self._send(404, envelope(None, error={
             "code": "NOT_FOUND", "message": f"Unknown route '{'/' + '/'.join(r)}'"}))
