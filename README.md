@@ -37,6 +37,13 @@ MediaFlow Jobs is now an AI-powered career intelligence platform (see
 - **Trust layer** — human-reviewed listing reports, verification history,
   fraud-caution flags, ingestion-run transparency
 - **Privacy** — full account export, resume deletion, consent log
+- **Premium job detail** — structured sections (responsibilities, qualifications,
+  benefits), 9-stage application tracker with deadlines and activity timeline,
+  per-job preparation workspace (truthful cover-letter draft, editable resume
+  tips, labeled practice questions), career copilot with grounded answers,
+  source & verification history panel
+- **In-browser PDF/DOCX resume extraction** (file never leaves the device)
+- **Admin analytics** — real usage + data-quality dashboard (`#/admin`)
 
 ## Project links
 

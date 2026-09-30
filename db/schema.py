@@ -210,4 +210,14 @@ CREATE TABLE IF NOT EXISTS learning_progress (
   updated_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (user_id, role, skill)
 );
+
+CREATE TABLE IF NOT EXISTS analytics_events (
+  id uuid PRIMARY KEY,
+  user_id uuid,
+  event_type text NOT NULL,
+  job_id text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_analytics_type_time ON analytics_events (event_type, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_analytics_job ON analytics_events (job_id);
 """

@@ -14,6 +14,7 @@ Design rules:
 
 from __future__ import annotations
 
+import json
 import re
 
 # --------------------------------------------------------------------------
@@ -556,3 +557,307 @@ def normalize_job(raw: dict, source: str) -> dict:
         "expires_at": raw.get("expires_at"),
         "is_verified": bool(raw.get("is_verified")),
     }
+
+
+# =============================================================================
+# Job-detail intelligence: description sections, prep workspace, copilot rules
+# =============================================================================
+
+SECTION_HEADINGS = [
+    ("about",          ["about", "overview", "the role", "role summary", "about the role", "job description"]),
+    ("responsibilities", ["responsibilities", "what you'll do", "what you will do", "your impact", "key responsibilities", "duties"]),
+    ("qualifications", ["required qualifications", "requirements", "qualifications", "who you are", "must have", "minimum qualifications", "you have", "what you need"]),
+    ("preferred",      ["preferred qualifications", "preferred", "nice to have", "bonus", "good to have", "plus"]),
+    ("benefits",      ["benefits", "perks", "what we offer", "why join", "we offer"]),
+    ("instructions",  ["how to apply", "application instructions", "apply now", "to apply", "application process", "apply instructions"]),
+]
+
+
+def split_description(desc: str) -> dict:
+    """Deterministically split a description blob into labeled sections.
+    Only reorganizes text that is actually present — never invents content."""
+    out = {key: [] for key, _ in SECTION_HEADINGS}
+    out["about"] = []
+    lines = [l.strip() for l in (desc or "").splitlines()]
+    current = "about"
+    for line in lines:
+        if not line:
+            continue
+        low = line.lower().strip()
+        matched = None
+        if len(line) < 70 and (low.endswith(":") or low == line.lower()):
+            for key, heads in SECTION_HEADINGS:
+                if low.rstrip(":") in heads:
+                    matched = key
+                    break
+        if matched:
+            current = matched
+            continue
+        out[current].append(line)
+    # text before any heading stays in 'about'
+    if not any(out.values()):
+        out["about"] = lines
+    return {k: "\n".join(v) for k, v in out.items() if v}
+
+
+# ---------------------------------------------------------------------------
+# Application preparation workspace (per job)
+# ---------------------------------------------------------------------------
+
+INTERVIEW_BANK = {
+    "SDE / SDE I / SDE II / SDE III": [
+        ("DSA", "Solve: detect a cycle in a linked list, and explain the O(1) space approach."),
+        ("DSA", "Solve: longest substring without repeating characters. Discuss sliding-window tradeoffs."),
+        ("Programming", "Explain memory management / garbage collection in your primary language."),
+        ("System design", "Design a URL shortener with analytics. Justify your storage choice."),
+        ("System design", "Design a rate limiter for a public API."),
+        ("Behavioral", "Tell me about a project that failed and what you changed afterwards."),
+    ],
+    "Backend Engineer": [
+        ("DSA", "Solve: merge overlapping intervals."),
+        ("System design", "Design an idempotent payment API with retries."),
+        ("Backend", "How would you handle N+1 query problems? Give a real example."),
+        ("Backend", "Explain indexes, and when an index hurts performance."),
+        ("Behavioral", "Describe a production bug you diagnosed end-to-end."),
+    ],
+    "Frontend Engineer": [
+        ("Frontend", "Explain the browser render pipeline and how you prevent layout thrash."),
+        ("Frontend", "Debounce vs throttle: implement one and pick a use case."),
+        ("Frontend", "How do you make a complex form accessible and keyboard-navigable?"),
+        ("Performance", "A page loads slowly. Walk through your diagnosis steps."),
+        ("Behavioral", "Show a UI you built and one tradeoff you would revisit."),
+    ],
+    "AI Engineer": [
+        ("RAG", "Design a RAG pipeline for a 100k-document corpus. How do you evaluate it?"),
+        ("RAG", "Chunking strategies: what would you pick for tabular data vs prose?"),
+        ("LLMs", "Explain hallucination, and three mitigations you have actually used."),
+        ("Agents", "When do you NOT use a multi-agent design?"),
+        ("ML fundamentals", "Overfitting: how do you detect and fix it?"),
+        ("Behavioral", "Describe an AI feature you shipped and how you measured quality."),
+    ],
+    "Machine Learning Engineer": [
+        ("ML fundamentals", "Bias–variance tradeoff with a concrete example."),
+        ("ML fundamentals", "How would you build a baseline before any deep model?"),
+        ("Data", "Your training data is imbalanced. What are your options, honestly ranked?"),
+        ("Deployment", "How do you monitor model drift in production?"),
+        ("Behavioral", "Walk me through a model you trained end-to-end."),
+    ],
+    "Data Scientist": [
+        ("Statistics", "Explain p-values to a product manager in two sentences."),
+        ("Statistics", "When does correlation genuinely mislead?"),
+        ("SQL", "Write a query: monthly retention cohort of active users."),
+        ("Data", "How do you handle missing data without inventing it?"),
+        ("Behavioral", "Tell me about an analysis that changed a decision."),
+    ],
+    "Data Analyst": [
+        ("SQL", "Window functions: compute a 7-day rolling average."),
+        ("SQL", "Find duplicate rows and explain your dedup criteria."),
+        ("Statistics", "A/B test: what can go wrong with peeking?"),
+        ("Visualization", "How do you pick chart types honestly?"),
+        ("Behavioral", "Describe a dashboard you built and who used it."),
+    ],
+    "Product Manager": [
+        ("Product", "How would you prioritize 20 feature requests with 2 engineers?"),
+        ("Product", "Define success metrics for a job-matching feature."),
+        ("Product", "How would you run a customer interview without leading questions?"),
+        ("Behavioral", "Tell me about a launch that flopped and what you learned."),
+    ],
+}
+DEFAULT_QUESTIONS = [
+    ("Fundamentals", "Pick one required skill from this listing and explain it to a beginner."),
+    ("Fundamentals", "Explain a project on your resume and the hardest bug in it."),
+    ("Behavioral", "Why this company and this role, specifically?"),
+]
+
+
+def interview_questions(job) -> list:
+    """Role-appropriate PRACTICE questions. These are generated study aids —
+    they are NOT actual employer interview questions."""
+    cat = (job.get("category") or "").strip()
+    qs = list(INTERVIEW_BANK.get(cat, DEFAULT_QUESTIONS))
+    for s in (job.get("skills_required") or job.get("skills") or [])[:4]:
+        qs.append(("Job-specific", f"Be ready to discuss '{s}' in depth: a project you used it in, "
+                                   f"a mistake you made with it, and how you'd verify your work."))
+    return qs
+
+
+def prep_workspace(parsed, job, user) -> dict:
+    """Deterministic, honest application-prep material built ONLY from the
+    actual job record and the user's (corrected) parsed resume."""
+    req = (job.get("skills_required") or job.get("skills") or [])
+    pref = (job.get("skills_preferred") or [])
+    seen = {s.lower() for s in req}
+    jskills = req + [s for s in pref if s.lower() not in seen]
+    matched = [s for s in jskills if s.lower() in {x.lower() for x in (parsed.get("skills") or [])}]
+    projects = parsed.get("projects") or []
+
+    tips = []
+    if matched:
+        tips.append(f"Highlight these skills you already have: {', '.join(matched[:6])}. "
+                    "Point at the specific project where you used each one.")
+    missing = [s for s in jskills if s.lower() not in {x.lower() for x in (parsed.get("skills") or [])}]
+    if missing:
+        tips.append(f"Missing keywords from the listing (required + preferred): {', '.join(missing[:6])}. Only add them "
+                    "if you genuinely have the experience — never keyword-stuff. If a project "
+                    "used one, name the project explicitly.")
+    if projects:
+        tips.append("Lead with the project most similar to this role, and quantify what you "
+                    "actually measured (users, accuracy, latency). No invented metrics.")
+    if parsed.get("graduation_year"):
+        tips.append(f"Your profile says graduation {parsed['graduation_year']} — check the "
+                    "listing's eligibility window before applying.")
+
+    # Cover letter draft: only real, attributable facts
+    name = (user or {}).get("display_name") or "there"
+    role, company = job.get("title") or "this role", job.get("company") or "your company"
+    skill_phrase = ", ".join(matched[:3]) if matched else "the core skills in your posting"
+    proj = projects[0].split(":")[0].strip() if projects else None
+    proj_sentence = (f"Most relevant to this role, I built {proj} — I can walk through the "
+                     "decisions and tradeoffs." if proj else
+                     "I would be glad to walk through my project work in detail.")
+    grad = (f"I am completing my {parsed.get('education') or 'degree'} in {parsed['graduation_year']}."
+            if parsed.get("graduation_year") else
+            "My education details are in my resume.")
+    letter = (
+        f"Dear {company} hiring team,\n\n"
+        f"I am applying for the {role} position. Reading your posting, the emphasis on "
+        f"{skill_phrase} matches what I have been building.\n\n"
+        f"{proj_sentence}\n\n"
+        f"{grad}\n"
+        f"Here is what I know about {company}: only what is in your own posting — I have not "
+        f"invented details. If the role is still open, I would welcome the chance to discuss "
+        f"how my work maps to your requirements.\n\n"
+        f"Thank you for your time,\n{name}\n\n"
+        f"(Draft generated from your verified resume fields — edit freely, keep it truthful.)"
+    )
+    return {
+        "resumeTips": tips or ["Add your resume in Resume AI first — tips are generated "
+                               "from your actual profile."],
+        "coverLetterDraft": letter,
+        "interviewQuestions": interview_questions(job),
+        "checklist": [
+            "Read the full official listing at the source link",
+            "Confirm eligibility (graduation year, experience, location)",
+            "Tailor resume bullets to the required skills above",
+            "Draft your cover letter, then edit it",
+            "Apply on the official employer URL",
+            "Record the application date in the tracker below",
+        ],
+        "disclaimer": "All material is generated deterministically from the listing and your "
+                      "resume. Practice questions are study aids, NOT this employer's actual "
+                      "questions. Nothing here is a prediction of hiring outcomes.",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Career copilot — deterministic fallback answers (LLM layer sits on top)
+# ---------------------------------------------------------------------------
+
+def copilot_answer(question, job, parsed, match) -> dict:
+    """Intent-routed answers using ONLY the actual job + parsed resume + match.
+    Used as the guaranteed-honest fallback when no LLM is available."""
+    q = (question or "").lower()
+    matched = match.get("required", {}).get("matched", [])
+    missing_req = match.get("required", {}).get("missing", [])
+    missing_pref = match.get("preferred", {}).get("missing", [])
+    elig = match.get("eligibility", {})
+    projects = parsed.get("projects") or []
+
+    def s(list_):
+        return ", ".join(list_) if list_ else "none listed"
+
+    if any(w in q for w in ("eligib", "qualif", "can i apply", "am i")):
+        return {"answer":
+            f"Based only on the posted requirements: you match {len(matched)} of the listed "
+            f"required skills ({s(matched)}); missing required skills: {s(missing_req)}. "
+            f"Eligibility flags from the listing itself: {json.dumps(elig)}. "
+            "This is a requirements summary, not a hiring prediction — the only way to know "
+            "is the official listing and the employer's own screening. Verify deadlines and "
+            "eligibility rules on the source page before applying.",
+            "intent": "eligibility"}
+    if any(w in q for w in ("improve", "learn", "skill", "gap")):
+        return {"answer":
+            f"Skill gaps for this specific role: required — {s(missing_req)}; preferred — "
+            f"{s(missing_pref)}. Prioritize required skills first. You can generate a full "
+            "learning plan with free resources in the Roadmap view for this role family.",
+            "intent": "skill_gaps"}
+    if any(w in q for w in ("tailor", "resume", "optimize", "keywords")):
+        tips = prep_workspace(parsed, job, {"display_name": ""})["resumeTips"]
+        return {"answer": " ".join(tips) +
+                " Regenerate the full workspace (cover letter, tips, checklist) in the "
+                "Preparation tab of this page.",
+            "intent": "resume_tailoring"}
+    if "project" in q or "highlight" in q:
+        proj = "\n".join(f"· {p}" for p in projects[:4]) or "No projects found in your resume yet."
+        return {"answer":
+            f"From your parsed resume, the projects on file are:\n{proj}\n"
+            f"Prioritize the one that overlaps most with: {s((job.get('skills_required') or job.get('skills') or [])[:5])}. "
+            "Be ready to explain tradeoffs and what you would redo.",
+            "intent": "projects"}
+    if any(w in q for w in ("interview", "prepare", "topic", "question")):
+        qs = interview_questions(job)[:5]
+        listed = "\n".join(f"· [{t}] {q}" for t, q in qs)
+        return {"answer":
+            f"Practice topics generated from this listing's requirements:\n{listed}\n"
+            "These are study aids based on the job's own skill list — NOT this employer's "
+            "actual interview questions. Track your prep progress in the Roadmap view.",
+            "intent": "interview_prep"}
+    if "cover letter" in q or "letter" in q:
+        return {"answer":
+            "The Preparation tab generates a cover-letter draft using only your verified "
+            "resume fields and this listing's posted requirements — open it, edit it, and "
+            "keep every claim true. I never invent work history or metrics.",
+            "intent": "cover_letter"}
+    if "roadmap" in q:
+        return {"answer":
+            "Open the Roadmap view, pick this role's target role, and you'll get a skill-gap "
+            "plan with real free resources (docs, courses, practice sites) plus a progress "
+            "tracker. It's a study guide, not an eligibility promise.",
+            "intent": "roadmap"}
+    if any(w in q for w in ("salary", "pay", "ctc")):
+        lo, hi = job.get("salary_min"), job.get("salary_max")
+        return {"answer":
+            (f"The listing itself states {job.get('salary_currency') or ''} {lo}–{hi}. "
+             "I only report what the posting states — I never estimate or predict offers."
+             if lo or hi else
+             "This listing does not state a salary, and I won't guess one. Check the official "
+             "source or ask the employer directly."),
+            "intent": "salary"}
+    return {"answer":
+        f"I can answer from this listing and your resume about: eligibility, skill gaps, "
+        f"resume tailoring, projects to highlight, interview practice topics, cover-letter "
+        f"strategy, and learning roadmaps. This role is '{job.get('title')}' at "
+        f"{job.get('company')} with required skills: {s((job.get('skills_required') or job.get('skills') or [])[:6])}. "
+        "Ask about any of those and I'll ground the answer in the actual data.",
+        "intent": "fallback"}
+
+
+def llm_copilot(question, job, parsed, match) -> str | None:
+    """Optional LLM layer. Returns free text grounded in strict context, or
+    None (caller falls back to copilot_answer). Never speaks for the employer."""
+    import urllib.parse, urllib.request
+    facts = {
+        "job": {k: job.get(k) for k in ("title", "company", "location", "remote_type",
+                                        "employment_type", "experience_level", "category",
+                                        "description", "skills_required", "skills_preferred",
+                                        "skills", "apply_url")},
+        "user_parsed": parsed,
+        "match_summary": match,
+        "question": question[:600],
+    }
+    prompt = (
+        "You are a career advisor inside a jobs platform. Answer the student's question using "
+        "ONLY the JSON context provided. Hard rules: never invent qualifications, policies, "
+        "salaries, interview questions, or hiring outcomes; clearly mark anything uncertain as "
+        "uncertain; do not claim the application was submitted; be concise (under 220 words); "
+        "end with one short actionable next step. Context:\n"
+        + json.dumps(facts)[:6000]
+    )
+    try:
+        url = "https://text.pollinations.ai/" + urllib.parse.quote(prompt)
+        req = urllib.request.Request(url, headers={"User-Agent": "mediaflow-copilot/1.0"})
+        with urllib.request.urlopen(req, timeout=12) as r:
+            text = r.read().decode("utf-8", "replace").strip()
+        return text if 20 <= len(text) <= 4000 else None
+    except Exception:
+        return None

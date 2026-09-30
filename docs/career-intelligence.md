@@ -95,10 +95,38 @@ AWS, map as follows (all components already have equivalents in this repo's
 - Sponsored opportunities: `jobs.sponsored` column exists; UI disclosure label
   required before any sponsored slot is sold — not active today.
 
+## Upgrade 2 — premium job-detail experience (30 Sep 2026)
+
+- **9-stage pipeline**: SAVED → PREPARING → APPLIED → ONLINE ASSESSMENT →
+  SCREENING → INTERVIEW → OFFER / REJECTED / WITHDRAWN, with applied-date,
+  assessment-deadline tracking, notes and an activity timeline
+  (`GET /api/mf/applications/:id`, tracker card on every job page).
+- **Structured job detail**: description deterministically reorganized into
+  About / Responsibilities / Required / Preferred / Benefits / Instructions
+  (`career.split_description`) — only reorganizes text that exists.
+- **Preparation workspace** (`GET /api/mf/jobs/:id/prep`): honest resume tips,
+  a truthful cover-letter draft (only verified user fields), categorized
+  interview PRACTICE questions (clearly labeled as NOT the employer's
+  questions), application checklist. All editable client-side.
+- **Career copilot** (`POST /api/mf/jobs/:id/copilot`): answers grounded in the
+  actual listing + parsed resume + match. LLM layer (strict prompt, 12s
+  timeout) with a guaranteed deterministic rules fallback; every response is
+  labeled and disclaimed. Salary answers never guess.
+- **In-browser PDF/DOCX extraction**: pdf.js + JSZip extract resume text in
+  the browser; the file never leaves the user's device — only reviewed text
+  is sent, after explicit consent.
+- **Analytics** (privacy-conscious, real counts only): `analytics_events`
+  table tracks job views, saves, apply starts, resume analyses, prep opens,
+  copilot uses. Internal admin dashboard at `#/admin` (ADMIN_TOKEN-gated) shows
+  real event counts, data quality, ingestion runs. No fabricated metrics.
+- **Design**: re-themed to the professional navy / white / blue palette
+  (light, accessible), responsive two-column job page (content + AI sidebar)
+  collapsing to a single column under 1000px.
+
 ## Remaining limitations (honest list)
 
-1. Resume intake is paste-your-text (PDF binary parsing is out of scope for the
-   stdlib runtime; the UI says so explicitly).
+1. Resume intake is paste-your-text or in-browser PDF/DOCX text extraction
+   (scanned-image PDFs still need manual paste; the UI says so).
 2. Aggregated sources are fetched at request time (Remotive, Arbeitnow,
    RemoteOK, MLH) with a curated static catalog as fallback; there is no
    scheduled crawler yet — the AWS EventBridge path above is the plan.
