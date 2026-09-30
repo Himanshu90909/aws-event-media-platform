@@ -1613,10 +1613,13 @@ class MFHandler(handler):
                     provider, ident["sub"], ident["email"], ident["name"], ident["picture"])
                 _store.audit_event(uid, "auth.login" if not created else "auth.signup", None,
                                    {"provider": provider})
-                _store.notify(uid, "account", "Welcome to MediaFlow Jobs",
-                              "Your account is ready. Explore live software opportunities.")
+                if created:
+                    _store.notify(uid, "account", "Welcome to MediaFlow Jobs",
+                                  "Your account is ready. Explore live software opportunities.")
                 token = make_session(uid)  # session rotation on login
                 dest = st.get("r") or "/"
+                if not dest.startswith("/") or dest.startswith("//"):
+                    dest = "/"          # same-site only, no open redirects
                 return self._redirect(dest, self._session_cookie(token))
             if sub == "demo" and method == "POST":
                 if _provider_configured("google") or _provider_configured("microsoft"):

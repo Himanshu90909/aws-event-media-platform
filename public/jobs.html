@@ -350,13 +350,17 @@ const Auth={
   open(){$("#authOverlay").classList.add("on")},
   closeAuth(){UI.closeAuth()},
   async oauth(p){
-    try{const r=await fetch(API+"/auth/login/"+p+"?redirect="+encodeURIComponent(location.hash||"#/"),{credentials:"same-origin"});
-      const j=await r.json();
-      if(r.ok&&j.data&&j.data.url){location=j.data.url;return}
-      if(r.status===501){toast("Provider not configured — use the demo sign-in.","bad");return}
-      if(r.redirected) return; // browser followed the 302 already
-      location.href=API+"/auth/login/"+p+"?redirect="+encodeURIComponent(location.hash||"#/");
-    }catch(e){toast("Login failed: "+e.message,"bad")}
+    // Full navigation is required: the login endpoint 302s to accounts.google.com,
+    // which a fetch() can never follow cross-origin (CORS). Probe first without
+    // following the redirect so a 501 "not configured" still shows as a toast.
+    const url=API+"/auth/login/"+p+"?redirect="+encodeURIComponent("/careers"+(location.hash||"#/"));
+    try{
+      const r=await fetch(url,{credentials:"same-origin",redirect:"manual"});
+      if(r.type==="opaqueredirect"||r.status===0){location.href=url;return}
+      if(r.ok){location.href=url;return}
+      const j=await r.json().catch(()=>null);
+      toast((j&&j.error&&j.error.message)||"Sign-in failed","bad");
+    }catch(e){location.href=url}
   },
   async demo(){
     const email=$("#demoEmail").value.trim(),name=$("#demoName").value.trim();
