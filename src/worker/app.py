@@ -5,6 +5,7 @@ from typing import Any
 import boto3
 
 from common.logging_utils import log
+from common.metrics import emit_metric, metric_timer
 from common.state import transition
 
 table = boto3.resource("dynamodb").Table(os.environ.get("JOBS_TABLE", "jobs"))
@@ -39,10 +40,12 @@ def handle_record(record: dict[str, Any]) -> str | None:
         if not transition(table, job_id, "QUEUED", "PROCESSING"):
             log("worker", "SKIPPED", job_id, reason="claimed_by_another_delivery")
             return None
-        result = process_media(job_id, current["objectKey"])
+        with metric_timer("JobProcessingLatency", jobId=job_id):
+            result = process_media(job_id, current["objectKey"])
         if not transition(table, job_id, "PROCESSING", "COMPLETED", result=json.dumps(result)):
             log("worker", "SKIPPED", job_id, reason="completion_race")
         else:
+            emit_metric("JobOutcome", 1, outcome="completed")
             log("worker", "COMPLETED", job_id, result=result)
         return None
     except Exception as exc:
@@ -52,6 +55,7 @@ def handle_record(record: dict[str, Any]) -> str | None:
                 transition(table, job_id, "PROCESSING", "FAILED", error=str(exc)[:1000])
             except Exception as update_exc:  # noqa: BLE001 - preserve original failure for SQS retry
                 log("worker", "ERROR", job_id, error=f"failure update failed: {update_exc}")
+        emit_metric("JobOutcome", 1, outcome="failed")
         log("worker", "ERROR", job_id, error=str(exc))
         raise
 

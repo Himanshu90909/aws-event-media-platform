@@ -1,0 +1,9 @@
+{
+  "Items": [
+    {"jobId": "j-001", "fileName": "concert-4k.mp4", "contentType": "video/mp4", "status": "COMPLETED", "result": "{\"processedBytes\": 812345678, \"processor\": \"lambda-metadata-v1\"}", "createdAt": "2026-01-10T09:00:00Z", "updatedAt": "2026-01-10T09:01:00Z", "objectKey": "media/j-001"},
+    {"jobId": "j-002", "fileName": "interview-audio.wav", "contentType": "audio/wav", "status": "FAILED", "error": "decode error: unsupported codec", "createdAt": "2026-01-10T09:05:00Z", "updatedAt": "2026-01-10T09:06:00Z", "objectKey": "media/j-002"},
+    {"jobId": "j-003", "fileName": "keynote-hd.mp4", "contentType": "video/mp4", "status": "COMPLETED", "result": "{\"processedBytes\": 2412345678, \"processor\": \"lambda-metadata-v1\"}", "createdAt": "2026-01-10T10:00:00Z", "updatedAt": "2026-01-10T10:02:00Z", "objectKey": "media/j-003"},
+    {"jobId": "j-004", "fileName": "budget-report.pdf", "contentType": "application/pdf", "status": "QUEUED", "createdAt": "2026-01-10T11:00:00Z", "updatedAt": "2026-01-10T11:00:00Z", "objectKey": "media/j-004"},
+    {"jobId": "j-005", "fileName": "poster-draft.png", "contentType": "image/png", "status": "FAILED", "error": "image decode failed: truncated stream", "createdAt": "2026-01-10T11:30:00Z", "updatedAt": "2026-01-10T11:31:00Z", "objectKey": "media/j-005"}
+  ]
+}

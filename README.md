@@ -45,6 +45,85 @@ MediaFlow Jobs is now an AI-powered career intelligence platform (see
 - **In-browser PDF/DOCX resume extraction** (file never leaves the device)
 - **Admin analytics** — real usage + data-quality dashboard (`#/admin`)
 
+## ML Engineering & AI Agents
+
+This project now includes a production-minded ML/agent layer on top of the
+existing event-driven pipeline: a document agent, an offline evaluation
+harness, and CloudWatch metrics. The design goal was the same discipline the
+pipeline already has — deterministic, testable, honest — applied to AI.
+
+### Agent architecture (`src/agent/`)
+
+The agent follows a LlamaIndex-style pattern (load -> index -> retrieve ->
+answer with citations), implemented with the Python standard library so the
+Lambda stays dependency-free. Each stage is a separate module and can be
+swapped without touching the others:
+
+- `documents.py` — `Document` model and the job-item -> document loader
+- `index.py` — `SearchIndex`, a TF-IDF cosine-similarity retriever (the swap
+  point for a real vector store or LlamaIndex later)
+- `llm.py` — `LLMProvider` protocol with two implementations: `EchoLLM`
+  (default; deterministic, offline, extractive-only — never invents answers)
+  and `HttpLLM` (OpenAI-compatible endpoint via stdlib urllib, configured by
+  `AGENT_LLM_URL` / `AGENT_LLM_API_KEY` / `AGENT_LLM_MODEL`)
+- `tools.py` — `ToolRegistry` with `search_jobs` and `get_job` tools; AWS
+  access is injected, never imported by the agent loop
+- `prompts.py` — all prompt wording in one place, separate from logic
+- `agent.py` — the loop: every question goes through retrieval first, then
+  the LLM answers strictly from the retrieved excerpts with `[n]` citations
+- `app.py` — Lambda handler behind `POST /agent/query` (scan-bounded index
+  build per invocation; `AGENT_INDEX_SCAN_LIMIT`, default 200)
+- `cli.py` — the same code paths run locally:
+  `PYTHONPATH=src python -m agent.cli query "which jobs failed?"`
+
+Why a deterministic planner instead of LLM tool-calling? Retrieval-first
+keeps the agent reproducible, cheap to evaluate offline, and honest about
+what the retriever actually found. The LLM only ever composes an answer
+from evidence it was handed.
+
+### Offline evaluation (`src/evaluation/`)
+
+- `golden.py` — a small golden set (question -> expected job ids) against
+  `tests/fixtures/job_items.json`, fully reproducible with no AWS access
+- `evaluate.py` — retrieval metrics (MRR, Precision@k, Recall@k) plus
+  `job_success_rate()` for pipeline health over exported job items
+- Run: `PYTHONPATH=src python -m agent.cli evaluate` — exits non-zero when
+  MRR falls below the configured threshold, so it can gate releases in CI
+
+### Monitoring and observability
+
+Metrics are emitted with CloudWatch Embedded Metric Format (EMF) from
+`src/common/metrics.py` — structured JSON logs that CloudWatch turns into
+metrics with no extra infrastructure or SDK dependency:
+
+| Metric | Emitted by | Meaning |
+| --- | --- | --- |
+| `JobOutcome` (outcome=completed/failed) | worker | job processing success rate |
+| `JobProcessingLatency` | worker | per-job processing duration |
+| `AgentQueryLatency` | agent Lambda | retrieval+answer latency, no_hits visible |
+| `AgentQueries` (outcome=ok/error) | agent Lambda | agent usage and error rate |
+| `DlqDepth` | `agent.cli dlq-depth` | poison-message backlog |
+
+An engineer monitoring production would watch: success rate by outcome
+(alarming on failed > threshold), latency p95s, DLQ depth (each message
+there failed 3 processing attempts), and agent error rate / no-hits ratio
+(retrieval quality regressions show up as no_hits before they show up as
+complaints).
+
+### How this maps to the ML lifecycle
+
+data (job records / media metadata) -> processing (event-driven pipeline)
+-> agent & tooling (index + query interface) -> evaluation (golden set,
+retrieval metrics, success rate) -> observability (EMF metrics, DLQ depth,
+structured logs). Each stage is independently swappable and tested.
+
+### What is deliberately NOT claimed
+
+The retrieval index is TF-IDF, not embeddings; the default LLM is a
+deterministic offline provider, not a hosted model. Tests mock all AWS
+calls, so nothing here claims production traffic or live model quality —
+the interfaces are what make the upgrades drop-in.
+
 ## Project links
 
 - [Architecture documentation](docs/architecture.md)

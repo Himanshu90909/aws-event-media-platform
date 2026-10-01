@@ -14,6 +14,11 @@ Parameters:
   GitHubBranch:
     Type: String
     Default: main
+  AgentLLM:
+    Type: String
+    Default: echo
+    AllowedValues: [echo, http]
+    Description: Agent LLM provider - echo (offline, default) or http (OpenAI-compatible; also set AGENT_LLM_* env vars in the console).
 
 Globals:
   Function:
@@ -143,6 +148,30 @@ Resources:
             FunctionResponseTypes:
               - ReportBatchItemFailures
 
+
+  AgentQueryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: agent.app.handler
+      Description: >
+        Media-jobs agent: builds a TF-IDF index over recent job records per
+        invocation and answers free-text questions with citations. The LLM
+        provider is swappable via AGENT_LLM (echo offline / http OpenAI-compatible).
+      Environment:
+        Variables:
+          AGENT_LLM: !Ref AgentLLM
+          AGENT_INDEX_SCAN_LIMIT: '200'
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref JobsTable
+      Events:
+        AgentQuery:
+          Type: Api
+          Properties:
+            Path: /agent/query
+            Method: post
+
   GitHubActionsRole:
     Type: AWS::IAM::Role
     Properties:
@@ -180,6 +209,9 @@ Resources:
                 Resource: '*'
 
 Outputs:
+  AgentQueryEndpoint:
+    Description: POST endpoint for the media-jobs agent.
+    Value: !Sub 'https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/agent/query'
   ApiUrl:
     Description: API Gateway endpoint.
     Value: !Sub 'https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod'
